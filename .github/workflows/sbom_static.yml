@@ -1,0 +1,117 @@
+name: Automated Multi-Tool SBOM Analysis
+
+on:
+  workflow_dispatch:
+    inputs:
+      src_repository:
+        description: 'Source Repository (owner/repo o URL)'
+        required: true
+      src_branch:
+        description: 'Branch'
+        required: false
+        default: 'main'
+      format:
+        description: 'Format (requirements, poetry, entrambi)'
+        required: false
+        default: 'entrambi'
+  repository_dispatch:
+    types: [run_sbom_analysis]
+
+permissions:
+  contents: read
+
+env:
+  SRC_REPO: ${{ github.event.client_payload.target_repository || inputs.src_repository }}
+  SRC_BRANCH: ${{ github.event.client_payload.target_branch || inputs.src_branch || 'main' }}
+  FORMAT_TYPE: ${{ github.event.client_payload.format || inputs.format || 'entrambi' }}
+  OUTPUT_DIR: 'sbom_outputs/static'
+
+jobs:
+  sbom-analysis:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Your Repository (Scripts)
+      uses: actions/checkout@v4
+      with:
+        path: mio_progetto
+        
+    - name: Checkout Target Repository
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ env.SRC_REPO }}
+        ref: ${{ env.SRC_BRANCH }}
+        path: repo_esterna
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install tools
+      run: |
+        pip install cyclonedx-bom poetry
+        curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+        curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
+
+    # ============================================================
+    # ESECUZIONE POETRY
+    # ============================================================
+    - name: Process Poetry SBOMs
+      if: ${{ env.FORMAT_TYPE == 'poetry' || env.FORMAT_TYPE == 'entrambi' }}
+      run: |
+        mkdir -p ${{ env.OUTPUT_DIR }}
+        TOML_PATH=$(find "$(pwd)/repo_esterna" -name "pyproject.toml" | head -n 1)
+        if [ -n "$TOML_PATH" ]; then
+          DIR_PATH=$(dirname "$TOML_PATH")
+          cd "$DIR_PATH"
+          poetry config virtualenvs.create false
+          poetry lock
+          cd -
+          
+          # Generazione SBOM
+          cyclonedx-py poetry --of JSON -o ${{ env.OUTPUT_DIR }}/cyclonedx_poetry.json $DIR_PATH
+          syft file:$DIR_PATH/poetry.lock -o json=${{ env.OUTPUT_DIR }}/syft_poetry.json
+          trivy fs --format cyclonedx --output ${{ env.OUTPUT_DIR }}/trivy_poetry.json $DIR_PATH/poetry.lock
+          
+          # Esecuzione confronto Poetry
+          if [ -f mio_progetto/confronto_poetry.py ]; then
+            cp mio_progetto/confronto_poetry.py .
+            python confronto_poetry.py
+          fi
+        else
+          echo "Skipping Poetry: pyproject.toml non trovato."
+        fi
+
+    # ============================================================
+    #  ESECUZIONE REQUIREMENTS
+    # ============================================================
+    - name: Process Requirements SBOMs
+      if: ${{ env.FORMAT_TYPE == 'requirements' || env.FORMAT_TYPE == 'entrambi' }}
+      run: |
+        mkdir -p ${{ env.OUTPUT_DIR }}
+        REQ_PATH=$(find "$(pwd)/repo_esterna" -name "requirements.txt" | head -n 1)
+        if [ -n "$REQ_PATH" ]; then
+          # Generazione SBOM analoghi per requirements
+          syft file:$REQ_PATH -o json=${{ env.OUTPUT_DIR }}/syft_requirements.json
+          trivy fs --format cyclonedx --output ${{ env.OUTPUT_DIR }}/trivy_requirements.json $REQ_PATH
+          
+          # Esecuzione tuo eventuale script di confronto requirements
+          if [ -f mio_progetto/confronto_requirements.py ]; then
+            cp mio_progetto/confronto_requirements.py .
+            python confronto_requirements.py
+          fi
+        else
+          echo "Skipping Requirements: requirements.txt non trovato."
+        fi
+
+    # ============================================================
+    # CARICAMENTO RISULTATI COMPLETI
+    # ============================================================
+    - name: Upload SBOM results
+      uses: actions/upload-artifact@v4
+      with:
+        name: sbom-static-results
+        path: |
+          ${{ env.OUTPUT_DIR }}/*.json
+          confronto_result_*.txt
