@@ -1,19 +1,24 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 import json
 import subprocess
 from dotenv import load_dotenv
 import os
 import re
 import requests
-from functools import lru_cache
 import tempfile
 import shutil
+import time
+import zipfile
+import io
+from typing import Optional
 
 load_dotenv()
 
 app = FastAPI(title="TLSAssistant Dependency Analyzer Backend")
 
 GITHUB_API = "https://api.github.com/repos"
+MY_GITHUB_OWNER = os.getenv("MY_GITHUB_OWNER", "IlTuoNomeUtenteGitHub")
+MY_GITHUB_REPO = os.getenv("MY_GITHUB_REPO", "IlNomeDellaTuaRepoDelTool")
 
 
 # ============================================================
@@ -45,82 +50,6 @@ def parse_github_url(url: str) -> str:
     repo = match.group(2).replace(".git", "")
 
     return f"https://github.com/{owner}/{repo}"
-
-
-# ============================================================
-# GITHUB METADATA
-# ============================================================
-
-@lru_cache(maxsize=128)
-def fetch_github_metadata(repo_url: str) -> dict:
-
-    if repo_url == "N/A":
-        return {}
-
-    try:
-        parts = repo_url.rstrip("/").split("/")
-        owner = parts[-2]
-        repo = parts[-1]
-
-        r = requests.get(
-            f"{GITHUB_API}/{owner}/{repo}",
-            headers=github_headers(),
-            timeout=5
-        )
-
-        if r.status_code != 200:
-            return {}
-
-        data = r.json()
-
-        return {
-            "language": data.get("language"),
-            "stars": data.get("stargazers_count"),
-            "default_branch": data.get("default_branch"),
-            "description": data.get("description")
-        }
-
-    except Exception:
-        return {}
-
-
-# ============================================================
-# PYPI METADATA
-# ============================================================
-
-@lru_cache(maxsize=128)
-def fetch_pypi_metadata(package_name: str) -> dict:
-
-    try:
-        r = requests.get(
-            f"https://pypi.org/pypi/{package_name}/json",
-            timeout=5
-        )
-
-        if r.status_code != 200:
-            return {}
-
-        info = r.json().get("info", {})
-
-        github_repo = "N/A"
-
-        for v in info.get("project_urls", {}).values():
-            if v and "github.com" in v.lower():
-                github_repo = parse_github_url(v)
-                break
-
-        if github_repo == "N/A":
-            home = info.get("home_page", "")
-            if "github.com" in home.lower():
-                github_repo = parse_github_url(home)
-
-        return {
-            "github_repo": github_repo,
-            "license": info.get("license")
-        }
-
-    except Exception:
-        return {}
 
 
 # ============================================================
@@ -190,56 +119,12 @@ def extract(item):
 
     return name, version, purl
 
-
-# ============================================================
-# MAIN ANALYZE (FILE)
-# ============================================================
-
-@app.post("/analyze")
-async def analyze(file: UploadFile = File(...)):
-
-    try:
-
-        data = json.loads(await file.read())
-
-        results = []
-        repos = []
-
-        for item in data:
-
-            t = item.get("type")
-
-            name, version, purl = extract(item)
-
-            repo = parse_github_url(item.get("url", ""))
-
-            if repo != "N/A":
-                repos.append(repo)
-
-            results.append({
-                "type": t,
-                "name": name,
-                "version": version,
-                "purl": purl,
-                "github_repo": repo
-            })
-
-        return {
-            "status": "ok",
-            "count": len(results),
-            "dependencies": results,
-            "detected_git_repos": list(set(repos))
-        }
-
-    except Exception as e:
-        raise HTTPException(400, str(e))
-
 # ====================================================
 # Analyze Repository (URL)
 # ====================================================
 
 @app.post("/analyze-repo")
-def analyze_repo(repo_url: str, branch: str = "main"):
+def analyze_repo(repo_url: str, branch: str = "main", path_dipendenze: str = "dependencies.json"):
 
     tmp = tempfile.mkdtemp()
 
@@ -261,14 +146,14 @@ def analyze_repo(repo_url: str, branch: str = "main"):
         target_file = None
 
         for root, _, files in os.walk(tmp):
-            if "dependencies.json" in files:
-                target_file = os.path.join(root, "dependencies.json")
+            if path_dipendenze in files:
+                target_file = os.path.join(root, path_dipendenze)
                 break
 
         if not target_file:
             return {
                 "status": "error",
-                "message": "dependencies.json non trovato nella repository"
+                "message": f"{path_dipendenze} non trovato nella repository"
             }
 
         # ====================================================
@@ -330,55 +215,117 @@ def analyze_repo(repo_url: str, branch: str = "main"):
 
 
 # ============================================================
-# DOCKER SBOM
+# ANALYZE REPOSITORY (TRIGGER GITHUB ACTION)
 # ============================================================
+@app.post("/analyze-static")
+async def analyze_static(
+    repo_url: str, 
+    branch: str = "main", 
+    format_type: str = Query("entrambi", description="Opzioni: requirements, poetry, entrambi")
+):
+    token = os.getenv("GITHUB_TOKEN")
+    if not token:
+        raise HTTPException(500, "GITHUB_TOKEN non trovato nel file .env")
 
-@app.post("/analyze-docker")
-def analyze_docker(image: str):
-
-    r = subprocess.run([
-        "trivy", "image",
-        "--format", "json",
-        image
-    ], capture_output=True, text=True)
-
-    return {
-        "image": image,
-        "sbom": json.loads(r.stdout) if r.stdout else {}
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28"
     }
 
+    # TRIGGER DELLA PIPELINE TRAMITE REPOSITORY DISPATCH
+    dispatch_url = f"https://api.github.com/repos/{MY_GITHUB_OWNER}/{MY_GITHUB_REPO}/dispatches"
+    
+    # Se viene passato un URL completo, estraiamo solo la parte owner/repo per evitare problemi di formattazione nella Action
+    clean_repo = repo_url.replace("https://github.com/", "").rstrip("/")
 
-# ============================================================
-# SBOM COMPARE
-# ============================================================
-
-def extract_purls(sbom):
-
-    purls = set()
-
-    for r in sbom.get("Results", []):
-        for p in r.get("Packages", []):
-            name = p.get("Name")
-            ver = p.get("Version")
-
-            if name:
-                purls.add(f"{name}@{ver}" if ver else name)
-
-    return purls
-
-
-@app.post("/sbom/compare")
-def compare(repo_sbom: dict, docker_sbom: dict):
-
-    repo = extract_purls(repo_sbom)
-    docker = extract_purls(docker_sbom)
-
-    return {
-        "only_in_repo": list(repo - docker),
-        "only_in_docker": list(docker - repo),
-        "common": list(repo & docker)
+    payload = {
+        "event_type": "run_sbom_analysis",
+        "client_payload": {
+            "target_repository": clean_repo,
+            "target_branch": branch,
+            "format": format_type.lower()
+        }
     }
 
+    trigger_res = requests.post(dispatch_url, headers=headers, json=payload)
+    if trigger_res.status_code != 204:
+        raise HTTPException(400, f"Errore nell'avvio del workflow GitHub: {trigger_res.text}")
+
+    # POLLING: Controllo lo stato della Run fino a completamento
+    time.sleep(6) # Tempo minimo di inizializzazione su GitHub
+    runs_url = f"https://api.github.com/repos/{MY_GITHUB_OWNER}/{MY_GITHUB_REPO}/actions/runs?event=repository_dispatch&per_page=1"
+    
+    run_id = None
+    for _ in range(40): # Timeout massimo esteso (~6-7 minuti per build complesse)
+        print("Controllo stato GitHub Action...")
+        try:
+            r = requests.get(runs_url, headers=headers).json()
+            runs = r.get("workflow_runs", [])
+            if runs:
+                latest_run = runs[0]
+                if latest_run.get("status") == "completed":
+                    if latest_run.get("conclusion") == "success":
+                        run_id = latest_run.get("id")
+                        break
+                    else:
+                        raise HTTPException(500, f"GitHub Action fallita (Conclusion: {latest_run.get('conclusion')})")
+        except Exception as e:
+            if isinstance(e, HTTPException): raise e
+            pass
+        time.sleep(10)
+
+    if not run_id:
+        raise HTTPException(408, "Timeout: L'elaborazione su GitHub Actions ha superato il tempo massimo.")
+
+    # DOWNLOAD E PARSING DEL CONFRONTO GENERATO
+    artifacts_url = f"https://api.github.com/repos/{MY_GITHUB_OWNER}/{MY_GITHUB_REPO}/actions/runs/{run_id}/artifacts"
+    artifacts_resp = requests.get(artifacts_url, headers=headers).json()
+    artifacts = artifacts_resp.get("artifacts", [])
+
+    if not artifacts:
+        raise HTTPException(404, "La pipeline ha girato ma non ha prodotto file di Artifact (confronto_results).")
+
+    # Scarichiamo il file zip dei risultati
+    artifact_id = artifacts[0].get("id")
+    download_url = f"https://api.github.com/repos/{MY_GITHUB_OWNER}/{MY_GITHUB_REPO}/actions/artifacts/{artifact_id}/zip"
+    file_resp = requests.get(download_url, headers=headers)
+    
+    report_content = ""
+    
+    # Estraiamo in memoria il testo generato dal tuo script python (confronto_result_poetry.txt o requirements)
+    with zipfile.ZipFile(io.BytesIO(file_resp.content)) as z:
+        for filename in z.namelist():
+            if filename.startswith("confronto_result_") and filename.endswith(".txt"):
+                with z.open(filename) as f:
+                    report_content += f"--- FILE: {filename} ---\n"
+                    report_content += f.read().decode("utf-8") + "\n\n"
+
+    return {
+        "status": "success",
+        "repository": clean_repo,
+        "format": format_type,
+        "github_run_url": f"https://github.com/{MY_GITHUB_OWNER}/{MY_GITHUB_REPO}/actions/runs/{run_id}",
+        "comparison_matrix": report_content if report_content else "Nessun report testuale generato dagli script di confronto."
+    }
+
+# ============================================================
+# ANALYZE FILES 
+# ============================================================
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from typing import Optional
+
+# ... il resto del tuo codice backend ...
+
+@app.post("/analyze-files")
+async def analyze_files(
+    repo_url: str,
+    branch: str = "main",
+    requirements_file: Optional[UploadFile] = File(None),
+    poetry_file: Optional[UploadFile] = File(None)
+):
+   print ("Ricevuta richiesta di analisi manuale con file caricati:")
+   print(f"Repo URL: {repo_url}")
 
 # ============================================================
 # RUN
