@@ -35,10 +35,6 @@ if uploaded_file is not None:
                         st.dataframe(df, use_container_width=True)
                     else:
                         st.info("Nessuna dipendenza trovata.")
-                        
-                    #  Report di Trivy
-                    st.subheader("Report Vulnerabilità Trivy")
-                    st.code(result_json.get("vulnerabilities_report", ""), language="text")
                     
                 else:
                     st.error(f"Il backend ha restituito un errore: {response.text}")
