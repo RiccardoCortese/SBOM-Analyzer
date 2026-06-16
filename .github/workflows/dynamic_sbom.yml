@@ -31,28 +31,17 @@ jobs:
       - name: Parse JSON to Matrix
         id: set-matrix
         run: |
-          echo "=== CONTENUTO FILE DIPENDENZE ==="
-          cat ${{ github.event.inputs.path_dipendenze }}
-          echo "================================="
-
           DEPENDENCIES=$(jq -c '[.[] | select(.url != null and (.url | contains("github.com"))) | .url]' ${{ github.event.inputs.path_dipendenze }})
-          
-          echo "=== MATRICE GENERATA ==="
-          echo "$DEPENDENCIES"
-          echo "========================"
-          
           if [ "$DEPENDENCIES" = "[]" ] || [ -z "$DEPENDENCIES" ]; then
             echo "ERRORE: Nessuna URL GitHub valida trovata nel file JSON!"
             exit 1
           fi
-
           echo "matrix=$DEPENDENCIES" >> $GITHUB_OUTPUT
 
   # --- JOB 2: ANALISI IN PARALLELO CON TRIVY ---
   trivy-analysis:
     needs: parse-dependencies
     runs-on: ubuntu-latest
-    if: ${{ needs.parse-dependencies.outputs.matrix != '[]' && needs.parse-dependencies.outputs.matrix != '' }}
     strategy:
       matrix:
         repo_url: ${{ fromJson(needs.parse-dependencies.outputs.matrix) }}
@@ -65,7 +54,6 @@ jobs:
           CLEAN_NAME=$(echo "${{ matrix.repo_url }}" | sed 's|https://github.com/||' | sed 's|/|-|g' | sed 's|.git||')
           echo "clean_name=$CLEAN_NAME" >> $GITHUB_OUTPUT
 
-      # CORRETTO: sources.list.d invece di sources.list.p
       - name: Install Trivy CLI
         run: |
           sudo apt-get update && sudo apt-get install -y wget apt-transport-https gnupg lsb-release
@@ -76,14 +64,12 @@ jobs:
       - name: Clone Dependency Repository
         id: clone-step
         run: |
-          echo "Tentativo di clonazione di: ${{ matrix.repo_url }}"
           git clone --depth 1 ${{ matrix.repo_url }} target_repo || echo "CLONE_FAILED=true" >> $GITHUB_ENV
 
       - name: Generate CycloneDX SBOM
         if: env.CLONE_FAILED != 'true'
         run: |
           trivy fs \
-            --debug \
             --format cyclonedx \
             --scanners vuln \
             --vuln-type library \
@@ -97,10 +83,34 @@ jobs:
         run: |
           echo '{"status": "failed", "repo": "${{ matrix.repo_url }}"}' > "${{ steps.repo-info.outputs.clean_name }}-sbom.json"
 
-      - name: Upload SBOM to Shared Artifact
+      # Carichiamo temporaneamente ogni file in un artifact univoco isolato per evitare sovrascritture concorrenti
+      - name: Upload Temporary Individual Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmp-sbom-${{ steps.repo-info.outputs.clean_name }}
+          path: '${{ steps.repo-info.outputs.clean_name }}-sbom.json'
+          retention-days: 1
+
+  # --- JOB 3: UNIFICAZIONE FINALE DEGLI ARTIFACT ---
+  merge-sboms:
+    needs: [parse-dependencies, trivy-analysis]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create Workspace Directory
+        run: mkdir -p combined-results
+
+      # Scarica tutti gli artifact generati nel job precedente che iniziano con 'tmp-sbom-'
+      - name: Download All Temporary Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: tmp-sbom-*
+          path: combined-results
+          merge-multiple: true
+
+      # Raggruppa tutti i file json estratti e li impacchetta nell'unico artifact definitivo cercato dal backend
+      - name: Upload Consolidated Artifact to Backend
         uses: actions/upload-artifact@v4
         with:
           name: sbom-matrix-results
-          path: '${{ steps.repo-info.outputs.clean_name }}-sbom.json'
+          path: combined-results/*.json
           retention-days: 1
-          overwrite: false
