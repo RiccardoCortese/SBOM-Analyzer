@@ -3,6 +3,13 @@ name: Dynamic Dependencies SBOM Analyzer
 on:
   workflow_dispatch:
     inputs:
+      src_repository:
+          description: 'Repository target da clonare (owner/repo)'
+          required: true
+      src_branch:
+        description: 'Branch della repo target'
+        required: true
+        default: 'main'
       path_dipendenze:
         description: 'Path del file delle dipendenze'
         required: true
@@ -15,8 +22,11 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-      - name: Checkout Repository
+      - name: Checkout Target Repository
         uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.inputs.src_repository }}
+          ref: ${{ github.event.inputs.src_branch }}
 
       - name: Parse JSON to Matrix
         id: set-matrix

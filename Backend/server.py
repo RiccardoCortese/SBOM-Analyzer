@@ -8,7 +8,7 @@ import requests
 import tempfile
 import shutil
 import time
-import zipfile  # <- REINSERITO IMPORT MANCANTE
+import zipfile
 from typing import Optional
 
 load_dotenv()
@@ -19,8 +19,8 @@ STORAGE_DIR = os.path.join(tempfile.gettempdir(), "tlsassistant_storage")
 os.makedirs(STORAGE_DIR, exist_ok=True)
 
 GITHUB_API = "https://api.github.com/repos"
-MY_GITHUB_OWNER = os.getenv("MY_GITHUB_OWNER", "IlTuoNomeUtenteGitHub")
-MY_GITHUB_REPO = os.getenv("MY_GITHUB_REPO", "IlNomeDellaTuaRepoDelTool")
+MY_GITHUB_OWNER = os.getenv("MY_GITHUB_OWNER", "RiccardoCortese")
+MY_GITHUB_REPO = os.getenv("MY_GITHUB_REPO", "SBOM-Analyzer")
 
 
 # ============================================================
@@ -119,7 +119,7 @@ def extract(item):
 # ============================================================
 
 def wait_and_download_artifacts(run_id: int, dest_dir: str):
-    """Attende il completamento della Run e scarica l'artifact risultante."""
+    """Attende il completamento della Run e scarica qualsiasi artifact di tipo SBOM risultante."""
     headers = github_headers()
     url_run = f"{GITHUB_API}/{MY_GITHUB_OWNER}/{MY_GITHUB_REPO}/actions/runs/{run_id}"
     
@@ -142,13 +142,16 @@ def wait_and_download_artifacts(run_id: int, dest_dir: str):
     url_artifacts = f"{url_run}/artifacts"
     res_art = requests.get(url_artifacts, headers=headers)
     if res_art.status_code != 200:
-        return
+        return False
 
     artifacts = res_art.json().get("artifacts", [])
-    target_artifact = next((a for a in artifacts if a["name"] == "sbom-static-results"), None)
+    
+    # Rilevamento flessibile per supportare sia l'artifact statico singolo sia quelli multipli della matrice
+    target_artifact = next((a for a in artifacts if "sbom" in a["name"]), None)
     
     if not target_artifact:
-        return
+        print("[DEBUG X] Nessun artifact contenente 'sbom' trovato per questa run.", flush=True)
+        return False
 
     # Download del pacchetto ZIP dell'artifact
     download_url = target_artifact["archive_download_url"]
@@ -160,27 +163,24 @@ def wait_and_download_artifacts(run_id: int, dest_dir: str):
         
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             zip_ref.extractall(dest_dir)
+        return True
+    
+    return False
 
 
-def trigger_github_action(repo_url: str, branch: str, format_type: str) -> Optional[dict]:
-    """Innesca la pipeline remota e restituisce dizionario con URL e Run ID."""
-    print("[DEBUG 1] Entrato in trigger_github_action", flush=True)
+def trigger_github_action(workflow_file: str, inputs: dict) -> Optional[dict]:
+    """Innesca una pipeline remota specifica e restituisce un dizionario con URL e Run ID."""
+    print(f"[DEBUG 1] Entrato in trigger_github_action per {workflow_file}", flush=True)
     headers = github_headers()
     if not headers:
         print("[DEBUG X] ERRORE: GITHUB_TOKEN non trovato o vuoto nelle variabili d'ambiente!", flush=True)
         return None
 
-    match = re.search(r"github\.com/([^/]+)/([^/?#]+)", repo_url)
-    owner_repo = f"{match.group(1)}/{match.group(2).replace('.git', '')}" if match else repo_url
-
-    url_dispatch = f"{GITHUB_API}/{MY_GITHUB_OWNER}/{MY_GITHUB_REPO}/actions/workflows/sbom_static.yml/dispatches"
+    # URL dinamico basato sul file .yml passato come argomento
+    url_dispatch = f"{GITHUB_API}/{MY_GITHUB_OWNER}/{MY_GITHUB_REPO}/actions/workflows/{workflow_file}/dispatches"
     payload = {
-        "ref": "main",
-        "inputs": {
-            "src_repository": owner_repo,
-            "src_branch": branch,
-            "format": format_type
-        }
+        "ref": "main", # Cambia in "develop" se i tuoi file workflow risiedono in quel branch
+        "inputs": inputs
     }
 
     print(f"[DEBUG 2] Invio POST a workflow dispatch... URL: {url_dispatch}", flush=True)
@@ -215,6 +215,7 @@ def trigger_github_action(repo_url: str, branch: str, format_type: str) -> Optio
             
     return None
 
+
 # ============================================================
 # ACQUISIZIONE E SALVATAGGIO IN MEMORIA SERVER
 # ============================================================
@@ -248,7 +249,7 @@ async def upload_sbom(
 
 
 # ============================================================
-# ANALISI COMPARATIVA INTEGRATA (Corretta 🛠️)
+# ANALISI COMPARATIVA INTEGRATA
 # ============================================================
 
 @app.post("/compare-dependencies")
@@ -258,8 +259,19 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
         github_run_url = None
         
         print("[BACKEND] Avvio trigger_github_action...", flush=True)
-        # Attivazione ed esecuzione del Polling se configurato per generare
-        action_info = trigger_github_action(repo_url, branch, format)
+        
+        # Mappatura parametri per l'analisi complessiva
+        match = re.search(r"github\.com/([^/]+)/([^/?#]+)", repo_url)
+        owner_repo = f"{match.group(1)}/{match.group(2).replace('.git', '')}" if match else repo_url
+
+        old_inputs = {
+            "src_repository": owner_repo,
+            "src_branch": branch,
+            "format": format
+        }
+        
+        # Attivazione ed esecuzione del Polling
+        action_info = trigger_github_action("sbom_static.yml", old_inputs)
         print(f"DEBUG: Risultato trigger_github_action -> {action_info}", flush=True)
         if action_info:
             github_run_url = action_info["html_url"]
@@ -313,7 +325,7 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
             except Exception:
                 return set()
 
-        # Leggiamo i file REALI mappati corretti (estratti dall'artifact o caricati)
+        # Leggiamo i file REALI mappati corretti
         req_identifiers = extract_identifiers("trivy_requirements.json")
         poetry_identifiers = extract_identifiers("trivy_poetry.json")
 
@@ -350,7 +362,7 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
             if os.path.exists(file_path):
                 try:
                     with open(file_path, "r", encoding="utf-8") as f:
-                        return f.read()  # Restituisce la stringa JSON così com'è
+                        return f.read()
                 except Exception:
                     return None
             return None
@@ -383,6 +395,69 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
         raise HTTPException(500, f"Errore interno del server: {str(e)}")
     finally:
         shutil.rmtree(tmp_clone, ignore_errors=True)
+
+
+# ============================================================
+# ANALISI COMPONENTI DEPENDENCIES.JSON IN PARALLELO
+# ============================================================
+
+@app.post("/analyze-dependencies-sbom")
+def analyze_dependencies_sbom(repo_url: str, branch: str, path_dipendenze: str = "dependencies.json"):
+    """
+    Endpoint per avviare la generazione dello SBOM parallelo per ogni singola dipendenza tramite Matrix.
+    """
+    workflow_name = "dynamic_sbom.yml"
+    print(f"[BACKEND] Innesco pipeline avanzata per singole dipendenze...", flush=True)
+    
+    # Estraiamo l'owner/repo dalla URL passata dal frontend 
+    match = re.search(r"github\.com/([^/]+)/([^/?#]+)", repo_url)
+    owner_repo = f"{match.group(1)}/{match.group(2).replace('.git', '')}" if match else repo_url
+    
+    inputs = {
+        "src_repository": owner_repo,
+        "src_branch": branch,
+        "path_dipendenze": path_dipendenze
+    }
+    # Avvia l'Action su GitHub 
+    run_info = trigger_github_action(workflow_name, inputs)
+    
+    if not run_info:
+        raise HTTPException(status_code=500, detail="Impossibile avviare il workflow 'dynamic_sbom.yml' su GitHub. Verifica i log del server.")
+        
+    run_id = run_info["id"]
+    github_run_url = run_info["html_url"]
+    
+    print(f"[BACKEND] Pipeline avviata con Run ID: {run_id}. Inizio polling...", flush=True)
+    
+    # Attende il completamento e scarica lo ZIP
+    try:
+        wait_and_download_artifacts(run_id, STORAGE_DIR)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Errore durante il polling degli artifact: {str(e)}")
+        
+    # Leggere tutti i file generati dalla matrice di GitHub Actions
+    generated_sboms = {}
+    
+    if os.path.exists(STORAGE_DIR):
+        print(f"[BACKEND] Lettura file scaricati in: {STORAGE_DIR}", flush=True)
+        for file_name in os.listdir(STORAGE_DIR):
+            # Identifichiamo i file generati singolarmente dall'action dinamica
+            if file_name.endswith("-sbom.json"):
+                file_path = os.path.join(STORAGE_DIR, file_name)
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        # Mappiamo { "owner-repo-sbom.json": "Contenuto JSON grezzo" }
+                        generated_sboms[file_name] = f.read()
+                    print(f"[BACKEND] Caricato con successo lo SBOM per: {file_name}", flush=True)
+                except Exception as e:
+                    print(f"[BACKEND] Errore nella lettura del file {file_name}: {str(e)}", flush=True)
+
+    # Invio dei dati strutturati a Streamlit
+    return {
+        "status": "success",
+        "github_run_url": github_run_url,
+        "sboms": generated_sboms
+    }
 
 
 if __name__ == "__main__":
