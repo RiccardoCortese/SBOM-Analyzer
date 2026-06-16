@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       src_repository:
-          description: 'Repository target da clonare (owner/repo)'
-          required: true
+        description: 'Repository target da clonare (owner/repo)'
+        required: true
       src_branch:
         description: 'Branch della repo target'
         required: true
@@ -31,15 +31,24 @@ jobs:
       - name: Parse JSON to Matrix
         id: set-matrix
         run: |
-          # Legge il file, filtra solo le url di github e crea un array JSON compatto
-          # Esempio output: ["https://github.com/user/repo1", "https://github.com/user/repo2"]
+          echo "=== CONTENUTO FILE DIPENDENZE ==="
+          cat ${{ github.event.inputs.path_dipendenze }}
+          echo "================================="
+
           DEPENDENCIES=$(jq -c '[.[] | select(.url != null and (.url | contains("github.com"))) | .url]' ${{ github.event.inputs.path_dipendenze }})
-          echo "Trovate le seguenti repo: $DEPENDENCIES"
           
-          # Passa la matrice al job successivo
+          echo "=== MATRICE GENERATA ==="
+          echo "$DEPENDENCIES"
+          echo "========================"
+          
+          if [ "$DEPENDENCIES" = "[]" ] || [ -z "$DEPENDENCIES" ]; then
+            echo "ERRORE: Nessuna URL GitHub valida trovata nel file JSON!"
+            exit 1
+          fi
+
           echo "matrix=$DEPENDENCIES" >> $GITHUB_OUTPUT
 
-  # --- JOB 2: ANALISI IN PARALLELO CON TRIVY NATIVO ---
+  # --- JOB 2: ANALISI IN PARALLELO CON TRIVY ---
   trivy-analysis:
     needs: parse-dependencies
     runs-on: ubuntu-latest
@@ -47,45 +56,48 @@ jobs:
     strategy:
       matrix:
         repo_url: ${{ fromJson(needs.parse-dependencies.outputs.matrix) }}
-      fail-fast: false # Continua a ciclare anche se una repo dà errore
+      fail-fast: false
     
     steps:
-      # Pulizia e formattazione del nome della repository
       - name: Clean up Repository Name
         id: repo-info
         run: |
           CLEAN_NAME=$(echo "${{ matrix.repo_url }}" | sed 's|https://github.com/||' | sed 's|/|-|g' | sed 's|.git||')
           echo "clean_name=$CLEAN_NAME" >> $GITHUB_OUTPUT
 
-      # Installazione stabile della CLI ufficiale di Trivy sulla macchina virtuale
+      # CORRETTO: sources.list.d invece di sources.list.p
       - name: Install Trivy CLI
         run: |
           sudo apt-get update && sudo apt-get install -y wget apt-transport-https gnupg lsb-release
           wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
-          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.p/trivy.list
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
           sudo apt-get update && sudo apt-get install -y trivy
 
-      # Clonazione della singola dipendenza (con try/catch per evitare crash se la repo è privata/inesistente)
       - name: Clone Dependency Repository
+        id: clone-step
         run: |
+          echo "Tentativo di clonazione di: ${{ matrix.repo_url }}"
           git clone --depth 1 ${{ matrix.repo_url }} target_repo || echo "CLONE_FAILED=true" >> $GITHUB_ENV
 
-      # Generazione dello SBOM tramite CLI nativa (analizza automaticamente Poetry, Pip, NPM, ecc.)
       - name: Generate CycloneDX SBOM
         if: env.CLONE_FAILED != 'true'
         run: |
           trivy fs \
+            --debug \
             --format cyclonedx \
             --scanners vuln \
             --vuln-type library \
             --output "${{ steps.repo-info.outputs.clean_name }}-sbom.json" \
-            target_repo/
+            target_repo/ || echo "TRIVY_FAILED=true" >> $GITHUB_ENV
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Caricamento dell'output nell'artifact 
+      - name: Create Fallback File on Failure
+        if: env.CLONE_FAILED == 'true' || env.TRIVY_FAILED == 'true'
+        run: |
+          echo '{"status": "failed", "repo": "${{ matrix.repo_url }}"}' > "${{ steps.repo-info.outputs.clean_name }}-sbom.json"
+
       - name: Upload SBOM to Shared Artifact
-        if: env.CLONE_FAILED != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: sbom-matrix-results
