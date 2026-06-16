@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 import json
 import subprocess
 from dotenv import load_dotenv
@@ -179,7 +179,7 @@ def trigger_github_action(workflow_file: str, inputs: dict) -> Optional[dict]:
     # URL dinamico basato sul file .yml passato come argomento
     url_dispatch = f"{GITHUB_API}/{MY_GITHUB_OWNER}/{MY_GITHUB_REPO}/actions/workflows/{workflow_file}/dispatches"
     payload = {
-        "ref": "main", # Cambia in "develop" se i tuoi file workflow risiedono in quel branch
+        "ref": "main",
         "inputs": inputs
     }
 
@@ -225,14 +225,15 @@ async def upload_sbom(
     action: str = Form(...),
     requirements_file: Optional[UploadFile] = File(None),
     poetry_file: Optional[UploadFile] = File(None),
+    docker_file: Optional[UploadFile] = File(None), 
 ):
     if os.path.exists(STORAGE_DIR):
         shutil.rmtree(STORAGE_DIR)
     os.makedirs(STORAGE_DIR, exist_ok=True)
 
     if action == "upload":
-        if not requirements_file and not poetry_file:
-            raise HTTPException(400, "Carica almeno uno dei due file.")
+        if not requirements_file and not poetry_file and not docker_file:
+            raise HTTPException(400, "Carica almeno un file JSON.")
 
         if requirements_file:
             with open(os.path.join(STORAGE_DIR, "trivy_requirements.json"), "wb") as f:
@@ -242,9 +243,16 @@ async def upload_sbom(
             with open(os.path.join(STORAGE_DIR, "trivy_poetry.json"), "wb") as f:
                 f.write(await poetry_file.read())
 
+        if docker_file: 
+            with open(os.path.join(STORAGE_DIR, "docker_sbom.json"), "wb") as f:
+                f.write(await docker_file.read())
+
         return {"status": "success", "message": "File manuali salvati sul server."}
 
     elif action == "generate":
+        if docker_file:
+            with open(os.path.join(STORAGE_DIR, "docker_sbom.json"), "wb") as f:
+                f.write(await docker_file.read())
         return {"status": "success", "message": "Pronto per l'attivazione della pipeline di generazione remota."}
 
 
@@ -260,24 +268,22 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
         
         print("[BACKEND] Avvio trigger_github_action...", flush=True)
         
-        # Mappatura parametri per l'analisi complessiva
         match = re.search(r"github\.com/([^/]+)/([^/?#]+)", repo_url)
         owner_repo = f"{match.group(1)}/{match.group(2).replace('.git', '')}" if match else repo_url
 
-        old_inputs = {
-            "src_repository": owner_repo,
-            "src_branch": branch,
-            "format": format
-        }
-        
-        # Attivazione ed esecuzione del Polling
-        action_info = trigger_github_action("sbom_static.yml", old_inputs)
-        print(f"DEBUG: Risultato trigger_github_action -> {action_info}", flush=True)
-        if action_info:
-            github_run_url = action_info["html_url"]
-            wait_and_download_artifacts(action_info["id"], STORAGE_DIR)
+        if format != "manual_only":
+            old_inputs = {
+                "src_repository": owner_repo,
+                "src_branch": branch,
+                "format": format
+            }
+            
+            action_info = trigger_github_action("sbom_static.yml", old_inputs)
+            print(f"DEBUG: Risultato trigger_github_action -> {action_info}", flush=True)
+            if action_info:
+                github_run_url = action_info["html_url"]
+                wait_and_download_artifacts(action_info["id"], STORAGE_DIR)
 
-        # Clonazione locale per estrarre il file di controllo dinamico
         subprocess.run([
             "git", "clone", "--depth", "1", "--branch", branch, repo_url, tmp_clone
         ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -296,6 +302,23 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
 
         if not isinstance(dependencies, list):
             raise HTTPException(400, "Il file delle dipendenze deve essere una lista JSON.")
+
+        docker_path = os.path.join(STORAGE_DIR, "docker_sbom.json")
+        docker_components = []
+        if os.path.exists(docker_path):
+            try:
+                with open(docker_path, "r", encoding="utf-8") as f:
+                    d_data = json.load(f)
+                raw_list = d_data.get("components", []) if isinstance(d_data, dict) else (d_data if isinstance(d_data, list) else [])
+                for c in raw_list:
+                    if isinstance(c, dict):
+                        docker_components.append({
+                            "name": c.get("name", "unknown"),
+                            "version": c.get("version", "unknown"),
+                            "purl": c.get("purl", "")
+                        })
+            except Exception:
+                pass
 
         def extract_identifiers(file_name):
             file_path = os.path.join(STORAGE_DIR, file_name)
@@ -325,12 +348,27 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
             except Exception:
                 return set()
 
-        # Leggiamo i file REALI mappati corretti
+        # Carichiamo gli identificatori reali estratti da Trivy
         req_identifiers = extract_identifiers("trivy_requirements.json")
         poetry_identifiers = extract_identifiers("trivy_poetry.json")
 
         extracted_data = []
         repos = []
+        
+        # Insiemi cumulativi totali del codice (dependencies + trivy requirements + trivy poetry)
+        all_code_names = set()
+        all_code_purls = set()
+
+        # Popoliamo inizialmente con i dati provenienti da Trivy
+        for name_req in req_identifiers:
+            all_code_names.add(name_req)
+            all_code_purls.add(f"pkg:pypi/{name_req}")
+            
+        for name_poe in poetry_identifiers:
+            all_code_names.add(name_poe)
+            all_code_purls.add(f"pkg:pypi/{name_poe}")
+
+        # Analizziamo la lista dependencies.json
         for item in dependencies:
             dep_type = item.get("type", "N/A")
             name, version, purl = extract(item)
@@ -341,6 +379,9 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
                 repos.append(github_repo)
 
             name_clean = str(name).lower().strip()
+            all_code_names.add(name_clean)
+            if purl:
+                all_code_purls.add(purl.split("@")[0].lower().strip())
 
             is_in_req = "✅" if name_clean in req_identifiers else "❌"
             is_in_poetry = "✅" if name_clean in poetry_identifiers else "❌"
@@ -357,6 +398,41 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
                 "present_in_poetry": is_in_poetry
             })
         
+        
+        in_common = []
+        only_in_docker = []
+
+        for dc in docker_components:
+            dc_name_clean = dc["name"].lower().strip()
+            dc_purl_clean = dc["purl"].split("@")[0].lower().strip() if dc["purl"] else ""
+
+            # Controllo incrociato completo (Nome o PURL parziale presente ovunque)
+            match_found = False
+            if dc_name_clean in all_code_names:
+                match_found = True
+            elif dc_purl_clean:
+                if dc_purl_clean in all_code_purls:
+                    match_found = True
+                else:
+                    # Fallback per pURL generici o controlli substring
+                    for cp in all_code_purls:
+                        if dc_purl_clean in cp or cp in dc_purl_clean:
+                            match_found = True
+                            break
+
+            if match_found:
+                in_common.append(dc)
+            else:
+                only_in_docker.append(dc)
+
+        docker_report = {
+            "total_docker_packages": len(docker_components),
+            "packages_in_common_count": len(in_common),
+            "packages_only_in_docker_count": len(only_in_docker),
+            "in_common": in_common,
+            "only_in_docker": only_in_docker
+        }
+
         def read_raw_file(file_name):
             file_path = os.path.join(STORAGE_DIR, file_name)
             if os.path.exists(file_path):
@@ -387,7 +463,8 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
             "github_run_url": github_run_url,
             "comparison_matrix": simulated_matrix,
             "raw_requirements": raw_requirements,
-            "raw_poetry": raw_poetry
+            "raw_poetry": raw_poetry,
+            "docker_report": docker_report 
         }
 
     except Exception as e:
@@ -403,13 +480,9 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
 
 @app.post("/analyze-dependencies-sbom")
 def analyze_dependencies_sbom(repo_url: str, branch: str, path_dipendenze: str = "dependencies.json"):
-    """
-    Endpoint per avviare la generazione dello SBOM parallelo per ogni singola dipendenza tramite Matrix.
-    """
     workflow_name = "dynamic_sbom.yml"
     print(f"[BACKEND] Innesco pipeline avanzata per singole dipendenze...", flush=True)
     
-    # Estraiamo l'owner/repo dalla URL passata dal frontend 
     match = re.search(r"github\.com/([^/]+)/([^/?#]+)", repo_url)
     owner_repo = f"{match.group(1)}/{match.group(2).replace('.git', '')}" if match else repo_url
     
@@ -418,7 +491,6 @@ def analyze_dependencies_sbom(repo_url: str, branch: str, path_dipendenze: str =
         "src_branch": branch,
         "path_dipendenze": path_dipendenze
     }
-    # Avvia l'Action su GitHub 
     run_info = trigger_github_action(workflow_name, inputs)
     
     if not run_info:
@@ -429,30 +501,25 @@ def analyze_dependencies_sbom(repo_url: str, branch: str, path_dipendenze: str =
     
     print(f"[BACKEND] Pipeline avviata con Run ID: {run_id}. Inizio polling...", flush=True)
     
-    # Attende il completamento e scarica lo ZIP
     try:
         wait_and_download_artifacts(run_id, STORAGE_DIR)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Errore durante il polling degli artifact: {str(e)}")
         
-    # Leggere tutti i file generati dalla matrice di GitHub Actions
     generated_sboms = {}
     
     if os.path.exists(STORAGE_DIR):
         print(f"[BACKEND] Lettura file scaricati in: {STORAGE_DIR}", flush=True)
         for file_name in os.listdir(STORAGE_DIR):
-            # Identifichiamo i file generati singolarmente dall'action dinamica
             if file_name.endswith("-sbom.json"):
                 file_path = os.path.join(STORAGE_DIR, file_name)
                 try:
                     with open(file_path, "r", encoding="utf-8") as f:
-                        # Mappiamo { "owner-repo-sbom.json": "Contenuto JSON grezzo" }
                         generated_sboms[file_name] = f.read()
                     print(f"[BACKEND] Caricato con successo lo SBOM per: {file_name}", flush=True)
                 except Exception as e:
                     print(f"[BACKEND] Errore nella lettura del file {file_name}: {str(e)}", flush=True)
 
-    # Invio dei dati strutturati a Streamlit
     return {
         "status": "success",
         "github_run_url": github_run_url,

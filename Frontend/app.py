@@ -4,7 +4,7 @@ import pandas as pd
 import json
 
 st.set_page_config(page_title="TLSAssistant Flow", layout="wide")
-st.title("SBOM Analyzer")
+st.title("🛡️ SBOM Analyzer & Docker Cross-Reference")
 
 BACKEND_URL = "http://127.0.0.1:8000"
 
@@ -21,6 +21,8 @@ if "analysis_results" not in st.session_state:
     st.session_state.analysis_results = None
 if "deep_sbom_results" not in st.session_state:
     st.session_state.deep_sbom_results = None
+if "docker_analyzed" not in st.session_state:
+    st.session_state.docker_analyzed = False
 
 # ============================================================
 # STEP 1: CONFIGURAZIONE TARGET & SBOM DI BASE
@@ -30,6 +32,10 @@ st.subheader("1. Configurazione Target & SBOM di Base")
 repo_url = st.text_input("GitHub Repository URL", value=st.session_state.saved_repo, placeholder="https://github.com/owner/repo")
 branch = st.text_input("Branch", value=st.session_state.saved_branch)
 
+# Uploader specifico per l'immagine Docker 
+docker_file = st.file_uploader("🐳 Opzionale: Carica lo SBOM dell'immagine Docker (JSON)", type=["json"])
+
+st.markdown("---")
 sbom_choice = st.radio(
     "Scegli l'origine dello SBOM di base:",
     ["Genera SBOM Statico da zero", "Carica file SBOM esistenti"],
@@ -60,16 +66,18 @@ if st.button("🔄 Invia e Mantieni in Memoria sul Server"):
         
     st.session_state.saved_repo = repo_url
     st.session_state.saved_branch = branch
+    st.session_state.docker_analyzed = False  # Resetta lo stato se cambiano i file target
 
     with st.spinner("Salvataggio file sul server..."):
         try:
-            if sbom_choice == "Genera SBOM Statico da zero":
-                res = requests.post(f"{BACKEND_URL}/upload-sbom", data={"action": "generate"})
-            else:
-                files = {}
-                if requirements_file: files["requirements_file"] = requirements_file.getvalue()
-                if poetry_file: files["poetry_file"] = poetry_file.getvalue()
-                res = requests.post(f"{BACKEND_URL}/upload-sbom", data={"action": "upload"}, files=files)
+            data_payload = {"action": "generate" if sbom_choice == "Genera SBOM Statico da zero" else "upload"}
+            files_payload = {}
+            
+            if requirements_file: files_payload["requirements_file"] = requirements_file.getvalue()
+            if poetry_file: files_payload["poetry_file"] = poetry_file.getvalue()
+            if docker_file: files_payload["docker_file"] = docker_file.getvalue() 
+            
+            res = requests.post(f"{BACKEND_URL}/upload-sbom", data=data_payload, files=files_payload)
                 
             if res.status_code == 200:
                 st.session_state.sbom_ready = True
@@ -93,20 +101,20 @@ if st.session_state.sbom_ready:
         value="dependencies.json"
     ).strip()
 
-    # Layout a due colonne per i pulsanti di attivazione delle pipeline
     btn_col1, btn_col2 = st.columns(2)
 
     with btn_col1:
         if st.button("📊 Genera Tabella di Confronto Base", use_container_width=True):
             with st.spinner("Innesco pipeline e calcolo matrice in corso..."):
                 try:
+                    fmt = st.session_state.saved_format if sbom_choice == "Genera SBOM Statico da zero" else "manual_only"
                     res = requests.post(
                         f"{BACKEND_URL}/compare-dependencies",
                         params={
                             "repo_url": st.session_state.saved_repo,
                             "branch": st.session_state.saved_branch,
                             "path_dipendenze": path_dipendenze,
-                            "format": st.session_state.saved_format,
+                            "format": fmt,
                         },
                     )
                     if res.status_code == 200:
@@ -120,7 +128,6 @@ if st.session_state.sbom_ready:
                     st.session_state.analysis_results = None
 
     with btn_col2:
-        # QUESTO È IL BOTTONE CHE ATTIVA IL NUOVO ENDPOINT SUL BACKEND!
         if st.button("🔍 Avvia Deep Inspection (Genera SBOM Dipendenze)", use_container_width=True):
             with st.spinner("Avvio Job Matrix su GitHub. Trivy sta analizzando ogni singola sottodipendenza..."):
                 try:
@@ -142,7 +149,7 @@ if st.session_state.sbom_ready:
                     st.error(f"Errore di connessione: {str(e)}")
                     st.session_state.deep_sbom_results = None
 
-    # RENDERING DEI RISULTATI
+    # DIPENDENZE DEL CODICE (SORGENTE)
     if st.session_state.analysis_results is not None:
         result = st.session_state.analysis_results
         dependencies = result.get("result", [])
@@ -150,109 +157,141 @@ if st.session_state.sbom_ready:
         comparison_report = result.get("comparison_matrix", None)
         raw_req = result.get("raw_requirements", None)
         raw_poe = result.get("raw_poetry", None)
+        docker_report = result.get("docker_report", {}) # Recupero dati docker dal backend
 
         st.markdown("---")
-        st.subheader("📊 Risultati dell'Analisi")
+        st.markdown("### 📦 Elenco Dipendenze Rilevate nel Codice")
+        
+        if dependencies:
+            col_tipo, col_comp, col_sorg, col_req, col_poe, col_az = st.columns([1, 2, 3, 1.5, 1.5, 1.5])
+            with col_tipo: st.markdown("**Tipo**")
+            with col_comp: st.markdown("**Componente**")
+            with col_sorg: st.markdown("**Sorgente / PURL**")
+            with col_req:  st.markdown("**In Requirements**")
+            with col_poe:  st.markdown("**In Poetry**")
+            with col_az:   st.markdown("**SBOM**")
+            st.markdown("---")
 
-        # Configurazione Tab dinamici
-        tab_labels = [f"📦 Componenti Rilevati ({len(dependencies)})", "🔗 Link GitHub Sorgenti"]
+            for idx, item in enumerate(dependencies):
+                c_tipo = item.get("type", "-")
+                c_name = item.get("name", "-")
+                c_url  = item.get("url", "-")
+                c_req  = item.get("present_in_requirements", "❌")
+                c_poe  = item.get("present_in_poetry", "❌")
+                
+                r_tipo, r_comp, r_sorg, r_req, r_poe, r_az = st.columns([1, 2, 3, 1.5, 1.5, 1.5])
+                with r_tipo: st.write(c_tipo)
+                with r_comp: st.write(c_name)
+                with r_sorg: st.write(c_url)
+                with r_req:  st.write(c_req)
+                with r_poe:  st.write(c_poe)
+                
+                with r_az:
+                    clean_repo_name = c_url.replace("https://github.com/", "").replace("/", "-").replace(".git", "")
+                    expected_filename = f"{clean_repo_name}-sbom.json"
+                    
+                    deep_results = st.session_state.get("deep_sbom_results", {})
+                    available_sboms = deep_results.get("sboms", {}) if deep_results else {}
+                    
+                    if expected_filename in available_sboms:
+                        st.download_button(
+                            label="⬇️ SBOM",
+                            data=available_sboms[expected_filename],
+                            file_name=expected_filename,
+                            mime="application/json",
+                            key=f"dl_row_{clean_repo_name}_{idx}",
+                            use_container_width=True
+                        )
+                    else:
+                        st.button(
+                            label="🚫 Non Disp.", 
+                            key=f"disabled_row_{idx}", 
+                            disabled=True,
+                            use_container_width=True
+                        )
+
+        # ============================================================
+        # AGGIUNTO: TABELLA 2 CONDIZIONALE (CONFRONTO IMMAGINE DOCKER)
+        # ============================================================
+        st.markdown("---")
+        st.subheader("🐳 Sezione di Analisi Immagine Docker")
+        
+        if not docker_file:
+            st.info("💡 Carica il file JSON dello SBOM Docker al 'Punto 1' per sbloccare questa sezione di confronto massivo.")
+        else:
+            # Il bottone appare sotto e solo se lo SBOM del codice è già stato calcolato
+            if st.button("🐳 Avvia Confronto Strutturato Immagine Docker", use_container_width=True):
+                st.session_state.docker_analyzed = True
+
+            if st.session_state.docker_analyzed and docker_report:
+                st.markdown("#### 📊 Statistiche e Deviazioni dell'Immagine Docker")
+                
+                # Indicatori KPI chiave in evidenza per dockerfile
+                kpi1, kpi2, kpi3 = st.columns(3)
+                kpi1.metric("Totale Pacchetti nel Docker", docker_report.get("total_docker_packages", 0))
+                kpi2.metric("✅ In Comune con il Codice", docker_report.get("packages_in_common_count", 0))
+                kpi3.metric("⚠️ Esclusivi Docker", docker_report.get("packages_only_in_docker_count", 0))
+
+                st.download_button(
+                    label="⬇️ Scarica Report Deviazioni Docker (JSON completo)",
+                    data=json.dumps(docker_report, indent=2),
+                    file_name="docker_cross_reference_report.json",
+                    mime="application/json",
+                    use_container_width=True
+                )
+                
+                # Sezioni collassabili ad alte prestazioni per mostrare i record filtrati
+                with st.expander(f"🟢 Pacchetti dell'Immagine Presenti nel Codice ({docker_report.get('packages_in_common_count')})"):
+                    if docker_report.get("in_common"):
+                        st.dataframe(pd.DataFrame(docker_report["in_common"]), use_container_width=True)
+                    else:
+                        st.info("Nessuna corrispondenza trovata.")
+
+                with st.expander(f"🔴 Pacchetti Isolati solo dentro l'Immagine Docker ({docker_report.get('packages_only_in_docker_count')})"):
+                    if docker_report.get("only_in_docker"):
+                        st.dataframe(pd.DataFrame(docker_report["only_in_docker"]), use_container_width=True)
+                    else:
+                        st.info("Nessun pacchetto extra rilevato.")
+
+        # ============================================================
+        # TAB DI TRASPARENZA IN CODA (LOGS E FILE COMPLETI)
+        # ============================================================
+        st.markdown("---")
+        st.subheader("📋 Log di Controllo e File di Configurazione Generati")
+        
+        tab_labels = ["🔗 Link GitHub Sorgenti"]
         if comparison_report: tab_labels.append("🔍 Matrice di Confronto (Pipeline)")
         if raw_req: tab_labels.append("📋 Trivy Requirements JSON")
         if raw_poe: tab_labels.append("📋 Trivy Poetry JSON")
         tab_labels.append("📄 JSON Grezzo Backend")
 
         tabs = st.tabs(tab_labels)
-
-        # Tab 0: Tabella Componenti con bottoni di download riga per riga
-        with tabs[0]:
-            if dependencies:
-                col_tipo, col_comp, col_sorg, col_req, col_poe, col_az = st.columns([1, 2, 3, 1.5, 1.5, 1.5])
-                with col_tipo: st.markdown("**Tipo**")
-                with col_comp: st.markdown("**Componente**")
-                with col_sorg: st.markdown("**Sorgente / PURL**")
-                with col_req:  st.markdown("**In Requirements**")
-                with col_poe:  st.markdown("**In Poetry**")
-                with col_az:   st.markdown("**Azione**")
-                st.markdown("---")
-
-                for idx, item in enumerate(dependencies):
-                    c_tipo = item.get("type", "-")
-                    c_name = item.get("name", "-")
-                    c_url  = item.get("url", "-")
-                    c_req  = item.get("present_in_requirements", "❌")
-                    c_poe  = item.get("present_in_poetry", "❌")
-                    
-                    r_tipo, r_comp, r_sorg, r_req, r_poe, r_az = st.columns([1, 2, 3, 1.5, 1.5, 1.5])
-                    with r_tipo: st.write(c_tipo)
-                    with r_comp: st.write(c_name)
-                    with r_sorg: st.write(c_url)
-                    with r_req:  st.write(c_req)
-                    with r_poe:  st.write(c_poe)
-                    
-                    with r_az:
-                        # Mappatura pulita del nome file atteso dallo storage backend
-                        clean_repo_name = c_url.replace("https://github.com/", "").replace("/", "-").replace(".git", "")
-                        expected_filename = f"{clean_repo_name}-sbom.json"
-                        
-                        deep_results = st.session_state.get("deep_sbom_results", {})
-                        available_sboms = deep_results.get("sboms", {}) if deep_results else {}
-                        
-                        if expected_filename in available_sboms:
-                            st.download_button(
-                                label="⬇️ SBOM",
-                                data=available_sboms[expected_filename],
-                                file_name=expected_filename,
-                                mime="application/json",
-                                key=f"dl_row_{clean_repo_name}_{idx}",
-                                use_container_width=True
-                            )
-                        else:
-                            st.button(
-                                label="🚫 Non Disp.", 
-                                key=f"disabled_row_{idx}", 
-                                disabled=True,
-                                use_container_width=True
-                            )
-            else:
-                st.info("Nessuna lista componenti strutturata disponibile.")
+        current_tab_idx = 0
         
-        # Tab 1: Link GitHub
-        with tabs[1]:
+        with tabs[current_tab_idx]:
             if git_repos:
-                for r in sorted(list(set(git_repos))):
-                    st.markdown(f"- [{r}]({r})" if r.startswith("http") else f"- {r}")
-            else:
-                st.info("Nessuna repository GitHub mappata come dipendenza diretta.")
+                for r in sorted(list(set(git_repos))): st.markdown(f"- [{r}]({r})" if r.startswith("http") else f"- {r}")
+            else: st.info("Nessuna repository GitHub mappata.")
+        current_tab_idx += 1
 
-        # Tab Matrice di Confronto
-        current_tab_idx = 2
         if comparison_report:
             with tabs[current_tab_idx]:
-                if result.get("github_run_url"):
-                    st.markdown(f"🌐 [Link alla Run di GitHub Actions]({result.get('github_run_url')})")
-                st.text_area("Log di Confronto:", value=comparison_report, height=300)
+                if result.get("github_run_url"): st.markdown(f"🌐 [Link Run Actions]({result.get('github_run_url')})")
+                st.text_area("Log di Confronto:", value=comparison_report, height=250)
             current_tab_idx += 1
 
-        # Tab Requirements JSON
         if raw_req:
             with tabs[current_tab_idx]:
-                st.markdown("### File `trivy_requirements.json` generato")
-                st.download_button("⬇️ Scarica", data=raw_req, file_name="trivy_requirements.json", mime="application/json", key="btn_dl_req")
                 st.code(raw_req, language="json")
             current_tab_idx += 1
 
-        # Tab Poetry JSON
         if raw_poe:
             with tabs[current_tab_idx]:
-                st.markdown("### File `trivy_poetry.json` generato")
-                st.download_button("⬇️ Scarica", data=raw_poe, file_name="trivy_poetry.json", mime="application/json", key="btn_dl_poe")
                 st.code(raw_poe, language="json")
             current_tab_idx += 1
 
-        # Ultimo Tab: JSON Grezzo Backend
         with tabs[current_tab_idx]:
             st.code(json.dumps(result, indent=2), language="json")
-            st.download_button("⬇️ Scarica JSON Completo Backend", data=json.dumps(result, indent=2), file_name="sbom_full_output.json", mime="application/json", key="btn_dl_full_backend")
 
 else:
     st.warning("⚠️ Completa il punto precedente e clicca su 'Invia e Mantieni in Memoria sul Server' per sbloccare l'analisi.")
