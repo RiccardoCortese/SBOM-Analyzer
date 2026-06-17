@@ -282,11 +282,25 @@ if st.session_state.sbom_ready:
 
         if raw_req:
             with tabs[current_tab_idx]:
+                st.download_button(
+                    label="⬇️ Scarica Trivy Requirements JSON",
+                    data=raw_req if isinstance(raw_req, str) else json.dumps(raw_req, indent=2),
+                    file_name="trivy_requirements.json",
+                    mime="application/json",
+                    key="dl_tab_requirements"
+                )
                 st.code(raw_req, language="json")
             current_tab_idx += 1
 
         if raw_poe:
             with tabs[current_tab_idx]:
+                st.download_button(
+                    label="⬇️ Scarica Trivy Poetry JSON",
+                    data=raw_poe if isinstance(raw_poe, str) else json.dumps(raw_poe, indent=2),
+                    file_name="trivy_poetry.json",
+                    mime="application/json",
+                    key="dl_tab_poetry"
+                )
                 st.code(raw_poe, language="json")
             current_tab_idx += 1
 

@@ -147,7 +147,7 @@ def wait_and_download_artifacts(run_id: int, dest_dir: str):
     artifacts = res_art.json().get("artifacts", [])
     
     # Rilevamento flessibile per supportare sia l'artifact statico singolo sia quelli multipli della matrice
-    target_artifact = next((a for a in artifacts if "sbom" in a["name"]), None)
+    target_artifact = next((a for a in artifacts if "sbom" in a["name"].lower() or "results" in a["name"].lower() or "trivy" in a["name"].lower()), None)
     
     if not target_artifact:
         print("[DEBUG X] Nessun artifact contenente 'sbom' trovato per questa run.", flush=True)
