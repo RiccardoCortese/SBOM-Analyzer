@@ -115,6 +115,32 @@ def extract(item):
 
 
 # ============================================================
+# FUNZIONE DI SUPPORTO PER CONFRONTO ROBUSTO DEI PURL
+# ============================================================
+def _clean_purl(purl_str: str) -> str:
+    """Rimuove in modo aggressivo parametri (?...) e versioni (@...) convertendo tutto in minuscolo"""
+    if not purl_str:
+        return ""
+    
+    # Decodifica eventuali caratteri URL come %40 (che indica la @ nei pacchetti npm/scoped)
+    import urllib.parse
+    purl_clean = urllib.parse.unquote(purl_str).lower().strip()
+    
+    # Rimuove i parametri che iniziano con ?
+    purl_clean = purl_clean.split('?')[0]
+    
+    # Rimuove la versione dopo la @ (facendo attenzione a non tagliare il prefisso pkg:oci o pkg:npm/%40)
+    # Se c'è una @ dopo il terzo carattere (quindi dopo pkg:), splittiamo lì
+    if "@" in purl_clean:
+        parts = purl_clean.split("@")
+        # Ricostruiamo prendendo tutto tranne l'ultimo elemento se l'ultimo è chiaramente la versione
+        # Un approccio più sicuro: se ci sono più @, l'ultima è solitamente la versione
+        purl_clean = "@".join(parts[:-1]) if len(parts) > 1 else parts[0]
+        
+    return purl_clean.strip()
+
+
+# ============================================================
 # LOGICA DI POLLING E SCARICAMENTO ARTIFACT
 # ============================================================
 
@@ -164,8 +190,22 @@ def wait_and_download_artifacts(run_id: int, dest_dir: str):
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             zip_ref.extractall(dest_dir)
         return True
-    
-    return False
+    manifests_dir = os.path.join(dest_dir, "manifests")
+    deps_dir = os.path.join(dest_dir, "dependencies")
+    os.makedirs(manifests_dir, exist_ok=True)
+    os.makedirs(deps_dir, exist_ok=True)
+
+    # Smistamento file
+    for file_name in os.listdir(dest_dir):
+        file_path = os.path.join(dest_dir, file_name)
+        if os.path.isfile(file_path) and file_name.endswith(".json"):
+            # Se è un manifest noto
+            if "requirements" in file_name or "poetry" in file_name:
+                shutil.move(file_path, os.path.join(manifests_dir, file_name))
+            # Se è un altro SBOM (dipendenze profonde)
+            elif file_name != "docker_sbom.json":
+                shutil.move(file_path, os.path.join(deps_dir, file_name))
+    return True
 
 
 def trigger_github_action(workflow_file: str, inputs: dict) -> Optional[dict]:
@@ -266,7 +306,7 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
     try:
         github_run_url = None
         
-        print("[BACKEND] Avvio trigger_github_action...", flush=True)
+        print("[BACKEND] Avvio trigger_github_action per analisi codice base...", flush=True)
         
         match = re.search(r"github\.com/([^/]+)/([^/?#]+)", repo_url)
         owner_repo = f"{match.group(1)}/{match.group(2).replace('.git', '')}" if match else repo_url
@@ -284,6 +324,7 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
                 github_run_url = action_info["html_url"]
                 wait_and_download_artifacts(action_info["id"], STORAGE_DIR)
 
+        # Clone leggero del repository per estrarre il file dipendenze custom
         subprocess.run([
             "git", "clone", "--depth", "1", "--branch", branch, repo_url, tmp_clone
         ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -302,35 +343,18 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
 
         if not isinstance(dependencies, list):
             raise HTTPException(400, "Il file delle dipendenze deve essere una lista JSON.")
-
-        docker_path = os.path.join(STORAGE_DIR, "docker_sbom.json")
-        docker_components = []
-        if os.path.exists(docker_path):
-            try:
-                with open(docker_path, "r", encoding="utf-8") as f:
-                    d_data = json.load(f)
-                raw_list = d_data.get("components", []) if isinstance(d_data, dict) else (d_data if isinstance(d_data, list) else [])
-                for c in raw_list:
-                    if isinstance(c, dict):
-                        docker_components.append({
-                            "name": c.get("name", "unknown"),
-                            "version": c.get("version", "unknown"),
-                            "purl": c.get("purl", "")
-                        })
-            except Exception:
-                pass
-
-        def extract_identifiers(file_name):
-            file_path = os.path.join(STORAGE_DIR, file_name)
+        
+        # Funzione di utilità per estrarre identificatori dai file JSON generati
+        def extract_names_and_purls(file_path):
+            names = set()
+            purls = set()
             if not os.path.exists(file_path):
-                return set()
+                return names, purls
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 
-                identifiers = set()
                 components_list = []
-
                 if isinstance(data, dict) and "components" in data:
                     components_list = data["components"]
                 elif isinstance(data, dict) and "artifacts" in data:
@@ -341,34 +365,23 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
                 for item in components_list:
                     if isinstance(item, dict):
                         name = item.get("name")
-                        if name: identifiers.add(str(name).lower().strip())
+                        purl = item.get("purl")
+                        if name: names.add(str(name).lower().strip())
+                        if purl: purls.add(str(purl).lower().strip())
                     elif isinstance(item, str):
-                        identifiers.add(item.lower().strip())
-                return identifiers
+                        names.add(item.lower().strip())
+                return names, purls
             except Exception:
-                return set()
+                return names, purls
 
-        # Carichiamo gli identificatori reali estratti da Trivy
-        req_identifiers = extract_identifiers("trivy_requirements.json")
-        poetry_identifiers = extract_identifiers("trivy_poetry.json")
+        # Carichiamo gli identificatori reali per la mappatura delle colonne nella tabella
+        req_identifiers, _ = extract_names_and_purls(os.path.join(STORAGE_DIR, "trivy_requirements.json"))
+        poetry_identifiers, _ = extract_names_and_purls(os.path.join(STORAGE_DIR, "trivy_poetry.json"))
 
         extracted_data = []
         repos = []
-        
-        # Insiemi cumulativi totali del codice (dependencies + trivy requirements + trivy poetry)
-        all_code_names = set()
-        all_code_purls = set()
 
-        # Popoliamo inizialmente con i dati provenienti da Trivy
-        for name_req in req_identifiers:
-            all_code_names.add(name_req)
-            all_code_purls.add(f"pkg:pypi/{name_req}")
-            
-        for name_poe in poetry_identifiers:
-            all_code_names.add(name_poe)
-            all_code_purls.add(f"pkg:pypi/{name_poe}")
-
-        # Analizziamo la lista dependencies.json
+        # Analizziamo e integriamo la lista dipendenze del repository Git
         for item in dependencies:
             dep_type = item.get("type", "N/A")
             name, version, purl = extract(item)
@@ -379,9 +392,6 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
                 repos.append(github_repo)
 
             name_clean = str(name).lower().strip()
-            all_code_names.add(name_clean)
-            if purl:
-                all_code_purls.add(purl.lower().strip())
 
             is_in_req = "✅" if name_clean in req_identifiers else "❌"
             is_in_poetry = "✅" if name_clean in poetry_identifiers else "❌"
@@ -397,50 +407,6 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
                 "present_in_requirements": is_in_req,
                 "present_in_poetry": is_in_poetry
             })
-        
-        
-        in_common = []
-        only_in_docker = []
-
-        for dc in docker_components:
-            dc_name_clean = dc["name"].lower().strip()
-            dc_purl_clean = dc["purl"].lower().strip() if dc["purl"] else "" 
-            
-            match_found = False
-            
-            # Se il PURL è presente, controllo SOLO il PURL (Controllo di massima severità ossia match esatto nome@version)
-            if dc_purl_clean:
-                if dc_purl_clean in all_code_purls:
-                    match_found = True
-                else:
-                    # Fallback Substring (se un purl è parziale):
-                    # Nel file dependencies.json il pacchetto è in modo generico: cp (codice) = pkg:deb/debian/curl@7.88.1
-                    # Trivy, scansionando l'immagine Docker, va a leggere i metadati reali dentro il sistema operativo del container e genera un PURL dettagliato, comprensivo di architettura e release di sicurezza Debian:
-                    # dc_purl_clean (docker) = pkg:deb/debian/curl@7.88.1-1+deb12u1?arch=amd64
-                    # In questo caso, il match non è esatto, ma possiamo considerare che il pacchetto sia lo stesso, quindi facciamo un controllo di substring.
-                    for cp in all_code_purls:
-                        if dc_purl_clean in cp or cp in dc_purl_clean:
-                            match_found = True
-                            break
-            
-            # Se il PURL NON esiste (stringa vuota), usiamo il nome come ultima spiaggia
-            else:
-                if dc_name_clean in all_code_names:
-                    match_found = True
-
-            # Smistamento nei report
-            if match_found:
-                in_common.append(dc)
-            else:
-                only_in_docker.append(dc)
-                
-        docker_report = {
-            "total_docker_packages": len(docker_components),
-            "packages_in_common_count": len(in_common),
-            "packages_only_in_docker_count": len(only_in_docker),
-            "in_common": in_common,
-            "only_in_docker": only_in_docker
-        }
 
         def read_raw_file(file_name):
             file_path = os.path.join(STORAGE_DIR, file_name)
@@ -457,11 +423,12 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
 
         simulated_matrix = (
             f"=== REPORT REALE PIPELINE ACTIONS ===\n"
-            f"Componenti estratti dal file dinamico: {len(extracted_data)}\n"
+            f"Componenti estratti dal file statico/manuale: {len(extracted_data)}\n"
             f"Trovati in Trivy (Requirements): {len([e for e in extracted_data if e['present_in_requirements'] == '✅'])}\n"
             f"Trovati in Trivy (Poetry): {len([e for e in extracted_data if e['present_in_poetry'] == '✅'])}\n"
         )
 
+        # Output pulito: Nessuna chiave "docker_report" presente qui. Il calcolo Docker avverrà solo nell'altro endpoint.
         return {
             "status": "success",
             "repo": repo_url,
@@ -472,17 +439,14 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
             "github_run_url": github_run_url,
             "comparison_matrix": simulated_matrix,
             "raw_requirements": raw_requirements,
-            "raw_poetry": raw_poetry,
-            "docker_report": docker_report 
+            "raw_poetry": raw_poetry
         }
 
     except Exception as e:
-        print(f"[CRITICAL ERROR] Qualcosa è fallito catastroficamente: {str(e)}", flush=True)
+        print(f"[CRITICAL ERROR] Fallimento catastrofico in compare_dependencies: {str(e)}", flush=True)
         raise HTTPException(500, f"Errore interno del server: {str(e)}")
     finally:
         shutil.rmtree(tmp_clone, ignore_errors=True)
-
-
 # ============================================================
 # ANALISI COMPONENTI DEPENDENCIES.JSON IN PARALLELO
 # ============================================================
@@ -538,11 +502,15 @@ def analyze_dependencies_sbom(repo_url: str, branch: str, path_dipendenze: str =
 # ============================================================
 # GENERAZIONE SBOM DOCKER REMOTA
 # ============================================================
-   
 
 @app.post("/generate-docker-sbom")
 def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
-
+    for sub in ["manifests", "dependencies"]:
+        path = os.path.join(STORAGE_DIR, sub)
+        if os.path.exists(path):
+            shutil.rmtree(path)
+        os.makedirs(path)
+        
     print(f"[BACKEND] Avvio pipeline Docker per l'immagine: {docker_target}", flush=True)
     
     # Allineamento Input con la tua GitHub Action (image_repository)
@@ -582,23 +550,41 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
     # Recuperiamo le informazioni del codice precedentemente salvate in STORAGE_DIR
     def extract_identifiers(file_name):
         file_path = os.path.join(STORAGE_DIR, file_name)
-        if not os.path.exists(file_path): return set()
+        if not os.path.exists(file_path): return set(), set()
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             identifiers = set()
+            purls = set()
             components_list = data.get("components", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
             for item in components_list:
-                if isinstance(item, dict) and item.get("name"):
-                    identifiers.add(str(item["name"]).lower().strip())
-            return identifiers
-        except Exception: return set()
+                if isinstance(item, dict):
+                    if item.get("name"):
+                        identifiers.add(str(item["name"]).lower().strip())
+                    if item.get("purl"):
+                        purls.add(str(item["purl"]).lower().strip())
+            return identifiers, purls
+        except Exception: return set(), set()
 
-    req_identifiers = extract_identifiers("trivy_requirements.json")
-    poetry_identifiers = extract_identifiers("trivy_poetry.json")
-    
-    all_code_names = req_identifiers.union(poetry_identifiers)
-    all_code_purls = {f"pkg:pypi/{name}" for name in all_code_names}
+    def get_all_code_identifiers():
+        all_names = set()
+        all_purls = set()
+        target_dirs = [
+            os.path.join(STORAGE_DIR, "manifests"),
+            os.path.join(STORAGE_DIR, "dependencies")
+        ]
+        for folder in target_dirs:
+            if not os.path.exists(folder): continue
+            for file_name in os.listdir(folder):
+                if file_name.endswith(".json"):
+                    n, p = extract_identifiers(os.path.join(folder, file_name))
+                    all_names.update(n)
+                    all_purls.update(p)
+        return all_names, all_purls
+
+    # 3. CHIAMA LA FUNZIONE E OTTIENI I SET PULITI
+   # 3. CHIAMA LA FUNZIONE E OTTIENI I SET PULITI
+    all_code_names, all_code_purls = get_all_code_identifiers()
 
     # Carichiamo i componenti appena scaricati dal Docker
     docker_components = []
@@ -618,6 +604,10 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
     in_common = []
     only_in_docker = []
 
+    # Creiamo il set di PURL del codice pulito per il confronto accurato
+    cleaned_code_purls = {_clean_purl(cp) for cp in all_code_purls if cp}
+
+    # CONFRONTO OTTIMIZZATO
     for dc in docker_components:
         dc_name_clean = dc["name"].lower().strip()
         dc_purl_clean = dc["purl"].lower().strip() if dc["purl"] else ""
@@ -648,13 +638,14 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
         "only_in_docker": only_in_docker
     }
 
-    # Per il download button del Frontend, restituiamo anche lo SBOM Docker completo in formato testo (raw) così da poterlo scaricare direttamente senza dover rifare una chiamata al backend per leggerlo.
+    # Per il download button del Frontend, restituiamo anche lo SBOM Docker completo in formato testo (raw)
     raw_docker_sbom = ""
     try:
         with open(os.path.join(STORAGE_DIR, "docker_sbom.json"), "r", encoding="utf-8") as f:
             raw_docker_sbom = f.read()
     except Exception as e:
         print(f"[WARNING] Impossibile leggere lo SBOM grezzo: {str(e)}")
+        
     return {
         "status": "success", 
         "github_run_url": docker_action_info["html_url"], 
@@ -662,6 +653,7 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
         "docker_report": docker_report,
         "raw_docker_sbom": raw_docker_sbom
     }
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000)

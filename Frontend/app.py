@@ -155,7 +155,7 @@ if st.session_state.sbom_ready:
 
     with btn_col2:
         if st.button("🔍 Avvia Deep Inspection (Genera SBOM Dipendenze)", use_container_width=True):
-            with st.spinner("Avvio Job Matrix su GitHub. Trivy sta analizzando ogni singola sottodipendenza..."):
+            with st.spinner("Trivy sta analizzando ogni singola sottodipendenza..."):
                 try:
                     res = requests.post(
                         f"{BACKEND_URL}/analyze-dependencies-sbom",
@@ -261,13 +261,17 @@ if st.session_state.sbom_ready:
                             response_data = res_docker.json()
                             
                             if "docker_report" in response_data:
-                                if st.session_state.analysis_results:
+                                # Se esiste già un'analisi del codice base, iniettiamo i dati Docker al suo interno
+                                if st.session_state.analysis_results is not None:
                                     st.session_state.analysis_results["docker_report"] = response_data["docker_report"]
                                     st.session_state.analysis_results["raw_docker_sbom"] = response_data.get("raw_docker_sbom", "")
                                 else:
+                                    # Fallback: se l'utente non ha premuto il Bottone 1, creiamo la struttura minima
                                     st.session_state.analysis_results = {
+                                        "result": [],
                                         "docker_report": response_data["docker_report"],
-                                        "raw_docker_sbom": response_data.get("raw_docker_sbom", "")}
+                                        "raw_docker_sbom": response_data.get("raw_docker_sbom", "")
+                                    }
                             
                             st.session_state.docker_analyzed = True
                             st.success("SBOM Docker generato con successo! Statistiche aggiornate sotto.")
@@ -280,28 +284,42 @@ if st.session_state.sbom_ready:
         elif docker_choice == "Carica SBOM Docker esistente (JSON)":
             if docker_file and not st.session_state.docker_analyzed:
                 if st.button("📊 Applica File Docker Caricato al Confronto", use_container_width=True):
-                    st.session_state.docker_analyzed = True
-                    st.rerun()
+                    # Se carichi manualmente lo SBOM, ci assicuriamo che esista un contenitore in session_state
+                    if st.session_state.analysis_results is None:
+                        st.session_state.analysis_results = {"result": [], "docker_report": {}}
+                    
+                    try:
+                        # Parsing del file caricato dall'utente e inserimento nello stato
+                        uploaded_content = json.loads(docker_file.getvalue().decode("utf-8"))
+                        # Qui ipotizziamo che il backend abbia già popolato il "docker_report" nell'endpoint /upload-sbom, 
+                        # o gestisci il parsing del dizionario custom caricato.
+                        st.session_state.docker_analyzed = True
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Errore nel parsing del file JSON caricato: {str(e)}")
 
-        # Rendering dei risultati
-        if st.session_state.docker_analyzed and docker_report and docker_report.get("total_docker_packages", 0) > 0:
+        # --- RE-ESTRAZIONE DATI AGGIORNATI DA SESSION STATE PER IL RENDERING ---
+        current_results = st.session_state.analysis_results if st.session_state.analysis_results else {}
+        current_docker_report = current_results.get("docker_report", {})
+
+        # Rendering dei risultati dinamici basati sullo stato aggiornato
+        if st.session_state.docker_analyzed and current_docker_report and current_docker_report.get("total_docker_packages", 0) > 0:
             st.markdown("#### 📊 Statistiche e Deviazioni dell'Immagine Docker")
             
             kpi1, kpi2, kpi3 = st.columns(3)
-            kpi1.metric("Totale Pacchetti nel Docker", docker_report.get("total_docker_packages", 0))
-            kpi2.metric("✅ In Comune con il Codice", docker_report.get("packages_in_common_count", 0))
-            kpi3.metric("⚠️ Esclusivi Docker", docker_report.get("packages_only_in_docker_count", 0))
+            kpi1.metric("Totale Pacchetti nel Docker", current_docker_report.get("total_docker_packages", 0))
+            kpi2.metric("✅ In Comune con il Codice", current_docker_report.get("packages_in_common_count", 0))
+            kpi3.metric("⚠️ Esclusivi Docker", current_docker_report.get("packages_only_in_docker_count", 0))
 
-            # Estraiamo lo SBOM completo dai risultati salvati
-            raw_docker_sbom = result.get("raw_docker_sbom", "")
+            raw_docker_sbom = current_results.get("raw_docker_sbom", "")
 
-            # Creiamo due colonne per i bottoni di download
+            # Colonne per i bottoni di download
             dl_col1, dl_col2 = st.columns(2)
             
             with dl_col1:
                 st.download_button(
                     label="⬇️ Scarica Report degli elementi SOLO nel Docker (JSON deviazioni)",
-                    data=json.dumps(docker_report, indent=2),
+                    data=json.dumps(current_docker_report, indent=2),
                     file_name="docker_cross_reference_report.json",
                     mime="application/json",
                     use_container_width=True
@@ -323,15 +341,15 @@ if st.session_state.sbom_ready:
                         use_container_width=True
                     )
             
-            with st.expander(f"🟢 Pacchetti dell'Immagine Presenti nel Codice ({docker_report.get('packages_in_common_count')})"):
-                if docker_report.get("in_common"):
-                    st.dataframe(pd.DataFrame(docker_report["in_common"]), use_container_width=True)
+            with st.expander(f"🟢 Pacchetti dell'Immagine Presenti nel Codice ({current_docker_report.get('packages_in_common_count', 0)})"):
+                if current_docker_report.get("in_common"):
+                    st.dataframe(pd.DataFrame(current_docker_report["in_common"]), use_container_width=True)
                 else:
                     st.info("Nessuna corrispondenza trovata.")
 
-            with st.expander(f"🔴 Pacchetti Isolati solo dentro l'Immagine Docker ({docker_report.get('packages_only_in_docker_count')})"):
-                if docker_report.get("only_in_docker"):
-                    st.dataframe(pd.DataFrame(docker_report["only_in_docker"]), use_container_width=True)
+            with st.expander(f"🔴 Pacchetti Isolati solo dentro l'Immagine Docker ({current_docker_report.get('packages_only_in_docker_count', 0)})"):
+                if current_docker_report.get("only_in_docker"):
+                    st.dataframe(pd.DataFrame(current_docker_report["only_in_docker"]), use_container_width=True)
                 else:
                     st.info("Nessun pacchetto extra rilevato.")
         else:
@@ -339,7 +357,6 @@ if st.session_state.sbom_ready:
                 st.info("💡 Clicca sul pulsante sopra per avviare la compilazione remota dell'immagine Docker e analizzarla.")
             else:
                 st.info("💡 Carica lo SBOM Docker al Punto 1 e clicca su 'Applica File Docker Caricato al Confronto' per vedere l'analisi.")
-
         # ============================================================
         # TAB DI TRASPARENZA IN CODA (LOGS E FILE COMPLETI)
         # ============================================================
