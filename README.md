@@ -12,13 +12,3 @@ Il sistema incrocia le dipendenze statiche del codice (`dependencies.json`, file
 * **Meccanismo di Polling Automatizzato**: Monitoraggio dello stato dei workflow remoti su GitHub con download e decompressione automatica degli artifact SBOM generati in formato ZIP.
 
 ---
-
-## 🛠️ Architettura e Struttura dei File
-
-L'applicazione si basa su moduli nativi di Python ed estensioni robuste per la gestione di API e richieste di rete:
-
-```text
-├── main.py                 # File principale dell'applicazione FastAPI
-├── requirements.txt        # Dipendenze esterne necessarie per l'esecuzione
-├── README.md               # Questa documentazione
-└── .env                    # File di configurazione delle variabili d'ambiente (locale)
