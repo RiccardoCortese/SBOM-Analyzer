@@ -381,7 +381,7 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
             name_clean = str(name).lower().strip()
             all_code_names.add(name_clean)
             if purl:
-                all_code_purls.add(purl.split("@")[0].lower().strip())
+                all_code_purls.add(purl.lower().strip())
 
             is_in_req = "✅" if name_clean in req_identifiers else "❌"
             is_in_poetry = "✅" if name_clean in poetry_identifiers else "❌"
@@ -404,27 +404,36 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
 
         for dc in docker_components:
             dc_name_clean = dc["name"].lower().strip()
-            dc_purl_clean = dc["purl"].split("@")[0].lower().strip() if dc["purl"] else ""
-
-            # Controllo incrociato completo (Nome o PURL parziale presente ovunque)
+            dc_purl_clean = dc["purl"].lower().strip() if dc["purl"] else "" 
+            
             match_found = False
-            if dc_name_clean in all_code_names:
-                match_found = True
-            elif dc_purl_clean:
+            
+            # Se il PURL è presente, controllo SOLO il PURL (Controllo di massima severità ossia match esatto nome@version)
+            if dc_purl_clean:
                 if dc_purl_clean in all_code_purls:
                     match_found = True
                 else:
-                    # Fallback per pURL generici o controlli substring
+                    # Fallback Substring (se un purl è parziale):
+                    # Nel file dependencies.json il pacchetto è in modo generico: cp (codice) = pkg:deb/debian/curl@7.88.1
+                    # Trivy, scansionando l'immagine Docker, va a leggere i metadati reali dentro il sistema operativo del container e genera un PURL dettagliato, comprensivo di architettura e release di sicurezza Debian:
+                    # dc_purl_clean (docker) = pkg:deb/debian/curl@7.88.1-1+deb12u1?arch=amd64
+                    # In questo caso, il match non è esatto, ma possiamo considerare che il pacchetto sia lo stesso, quindi facciamo un controllo di substring.
                     for cp in all_code_purls:
                         if dc_purl_clean in cp or cp in dc_purl_clean:
                             match_found = True
                             break
+            
+            # Se il PURL NON esiste (stringa vuota), usiamo il nome come ultima spiaggia
+            else:
+                if dc_name_clean in all_code_names:
+                    match_found = True
 
+            # Smistamento nei report
             if match_found:
                 in_common.append(dc)
             else:
                 only_in_docker.append(dc)
-
+                
         docker_report = {
             "total_docker_packages": len(docker_components),
             "packages_in_common_count": len(in_common),
