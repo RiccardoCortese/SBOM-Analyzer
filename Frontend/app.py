@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd
 import json
+from streamlit_agraph import agraph, Node, Edge, Config
 
 st.set_page_config(page_title="TLSAssistant Flow", layout="wide")
 st.title("🛡️ SBOM Analyzer & Docker Cross-Reference")
@@ -261,6 +262,8 @@ if st.session_state.sbom_ready:
                         )
                         if res_docker.status_code == 200:
                             response_data = res_docker.json()
+                            if "graphs" in response_data:
+                                st.session_state["docker_results"] = {"graphs": response_data["graphs"]}
                             
                             if "docker_report" in response_data:
                                 # Se esiste già un'analisi del codice base, iniettiamo i dati Docker al suo interno
@@ -377,6 +380,49 @@ if st.session_state.sbom_ready:
                 st.info("💡 Clicca sul pulsante sopra per avviare la compilazione remota dell'immagine Docker e analizzarla.")
             else:
                 st.info("💡 Carica lo SBOM Docker al Punto 1 e clicca su 'Applica File Docker Caricato al Confronto' per vedere l'analisi.")
+        
+        # ============================================================
+        # TAB DI VISUALIZZAZIONE GRAFICA DELLE DIPENDENZE
+        # ============================================================
+        st.markdown("---")
+        st.subheader("Analisi delle Dipendenze (Grafo)")
+
+        with st.container():
+            # Uniamo i grafi che arrivano da analisi diverse (Repo o Docker)
+            repo_graphs = st.session_state.get("deep_sbom_results", {}).get("graphs", {})
+            docker_graphs = st.session_state.get("docker_results", {}).get("graphs", {})
+            
+            print("Repo Graphs:", repo_graphs)
+            print("Docker Graphs:", docker_graphs)
+            
+            # Combiniamo i due dizionari
+            all_graphs = {**repo_graphs, **docker_graphs}
+            
+            if all_graphs:
+                file_selezionato = st.selectbox(
+                    "Seleziona lo SBOM da visualizzare nel grafo:", 
+                    options=list(all_graphs.keys()),
+                    key="grafo_select" # Importante aggiungere una chiave univoca
+                )
+                
+                graph_data = all_graphs[file_selezionato]
+                
+                # Creazione nodi e archi
+                nodes = [Node(id=n["id"], label=n["label"], size=15) for n in graph_data["nodes"]]
+                edges = [Edge(source=e["source"], target=e["target"]) for e in graph_data["edges"]]
+                
+                # Configurazione (aggiungiamo 'hierarchical' se il grafo è enorme)
+                config = Config(
+                    height=500, 
+                    width=700, 
+                    directed=True, 
+                    physics=True,
+                    hierarchical=False 
+                )
+                
+                agraph(nodes=nodes, edges=edges, config=config)
+            else:
+                st.info("Esegui un'analisi (Repo o Docker) per generare i grafi.")
         # ============================================================
         # TAB DI TRASPARENZA IN CODA (LOGS E FILE COMPLETI)
         # ============================================================

@@ -90,7 +90,6 @@ def classify(dep_type: str):
         "compile_maven": "build"
     }.get(dep_type, "unknown")
 
-
 # ============================================================
 # EXTRACT
 # ============================================================
@@ -115,31 +114,53 @@ def extract(item):
     purl = build_purl(t, name, None if version == "unknown" else version)
     return name, version, purl
 
-
 # ============================================================
-# FUNZIONE DI SUPPORTO PER CONFRONTO ROBUSTO DEI PURL
+# GRAPH DATA EXTRACTION per visualizzazione grafo
 # ============================================================
-def _clean_purl(purl_str: str) -> str:
-    """Rimuove in modo aggressivo parametri (?...) e versioni (@...) convertendo tutto in minuscolo"""
-    if not purl_str:
-        return ""
-    
-    # Decodifica eventuali caratteri URL come %40 (che indica la @ nei pacchetti npm/scoped)
-    import urllib.parse
-    purl_clean = urllib.parse.unquote(purl_str).lower().strip()
-    
-    # Rimuove i parametri che iniziano con ?
-    purl_clean = purl_clean.split('?')[0]
-    
-    # Rimuove la versione dopo la @ (facendo attenzione a non tagliare il prefisso pkg:oci o pkg:npm/%40)
-    # Se c'è una @ dopo il terzo carattere (quindi dopo pkg:), splittiamo lì
-    if "@" in purl_clean:
-        parts = purl_clean.split("@")
-        # Ricostruiamo prendendo tutto tranne l'ultimo elemento se l'ultimo è chiaramente la versione
-        # Un approccio più sicuro: se ci sono più @, l'ultima è solitamente la versione
-        purl_clean = "@".join(parts[:-1]) if len(parts) > 1 else parts[0]
+def extract_graph_data(sbom_content):
+    """Trasforma un SBOM CycloneDX in formato nodo-arco per la visualizzazione."""
+    try:
+        data = json.loads(sbom_content)
+        nodes = []
+        edges = []
         
-    return purl_clean.strip()
+        # Estrazione Nodi (usa 'bom-ref' come ID univoco se presente)
+        components = data.get("components", [])
+        for comp in components:
+            node_id = comp.get("bom-ref") or comp.get("name")
+            nodes.append({
+                "id": node_id,
+                "label": comp.get("name")
+            })
+            
+        # Estrazione Archi (Dipendenze)
+        dependencies = data.get("dependencies", [])
+        for dep in dependencies:
+            source = dep.get("ref")
+            for child in dep.get("dependsOn", []):
+                edges.append({
+                    "source": source,
+                    "target": child
+                })
+        return {"nodes": nodes, "edges": edges}
+    except Exception as e:
+        print(f"[ERROR] Fallimento estrazione grafo: {e}")
+        return {"nodes": [], "edges": []}
+    
+def generate_graphs_for_folder(folder_path):
+    graphs = {}
+    if not os.path.exists(folder_path):
+        return graphs
+    for file_name in os.listdir(folder_path):
+        if file_name.endswith(".json"):
+            file_path = os.path.join(folder_path, file_name)
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                    graphs[file_name] = extract_graph_data(content)
+            except Exception as e:
+                print(f"[ERROR] Impossibile generare grafo per {file_name}: {e}")
+    return graphs
 
 
 # ============================================================
@@ -512,10 +533,17 @@ def analyze_dependencies_sbom(repo_url: str, branch: str, path_dipendenze: str =
                         print(f"[BACKEND] Caricato con successo: {file_name}", flush=True)
                     except Exception as e:
                         print(f"[BACKEND] Errore nella lettura {file_path}: {str(e)}", flush=True)
+    
+    # Generazione dei dati per la visualizzazione del grafo
+    graph_results = {}
+    graph_results.update(generate_graphs_for_folder(os.path.join(STORAGE_DIR, "manifests")))
+    graph_results.update(generate_graphs_for_folder(os.path.join(STORAGE_DIR, "dependencies")))
+   
     return {
         "status": "success",
         "github_run_url": github_run_url,
-        "sboms": generated_sboms
+        "sboms": generated_sboms,
+        "graphs": graph_results
     }
  
 # ============================================================
@@ -563,6 +591,10 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
     # Rinominiamo il file in standard 'docker_sbom.json' per i futuri controlli del backend
     shutil.move(target_path, os.path.join(STORAGE_DIR, "docker_sbom.json"))
 
+    # Generazione dei grafi per la visualizzazione nel frontend
+    docker_graph_results = generate_graphs_for_folder(STORAGE_DIR)
+    print (f"[BACKEND] Grafi generati per Docker SBOM: {list(docker_graph_results.keys())}", flush=True)
+    
     # Calcolo Cross-Reference immediato per aggiornare i KPI del Frontend
     # Recuperiamo le informazioni del codice precedentemente salvate in STORAGE_DIR
     def extract_identifiers(file_name):
@@ -699,12 +731,15 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
     except Exception as e:
         print(f"[WARNING] Impossibile leggere lo SBOM grezzo: {str(e)}")
         
+    
+        
     return {
         "status": "success", 
         "github_run_url": docker_action_info["html_url"], 
         "message": "SBOM Docker generato, scaricato e confrontato con successo.",
         "docker_report": docker_report,
-        "raw_docker_sbom": raw_docker_sbom
+        "raw_docker_sbom": raw_docker_sbom,
+        "graphs": docker_graph_results
     }
 
 if __name__ == "__main__":
