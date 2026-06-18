@@ -491,18 +491,27 @@ def analyze_dependencies_sbom(repo_url: str, branch: str, path_dipendenze: str =
         
     generated_sboms = {}
     
-    if os.path.exists(STORAGE_DIR):
-        print(f"[BACKEND] Lettura file scaricati in: {STORAGE_DIR}", flush=True)
-        for file_name in os.listdir(STORAGE_DIR):
-            if file_name.endswith("-sbom.json"):
-                file_path = os.path.join(STORAGE_DIR, file_name)
-                try:
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        generated_sboms[file_name] = f.read()
-                    print(f"[BACKEND] Caricato con successo lo SBOM per: {file_name}", flush=True)
-                except Exception as e:
-                    print(f"[BACKEND] Errore nella lettura del file {file_name}: {str(e)}", flush=True)
-
+    # Definizione delle cartelle da scansionare
+    folders_to_scan = [
+        os.path.join(STORAGE_DIR, "manifests"),
+        os.path.join(STORAGE_DIR, "dependencies")
+    ]
+    
+    print(f"[BACKEND] Lettura file SBOM nelle cartelle: {folders_to_scan}", flush=True)
+    
+    for folder in folders_to_scan:
+        if os.path.exists(folder):
+            for file_name in os.listdir(folder):
+                if file_name.endswith("-sbom.json"):
+                    # CORREZIONE: Usa 'folder' invece di 'STORAGE_DIR' per creare il path
+                    file_path = os.path.join(folder, file_name)
+                    try:
+                        with open(file_path, "r", encoding="utf-8") as f:
+                            # Usiamo il path relativo o il nome come chiave
+                            generated_sboms[file_name] = f.read()
+                        print(f"[BACKEND] Caricato con successo: {file_name}", flush=True)
+                    except Exception as e:
+                        print(f"[BACKEND] Errore nella lettura {file_path}: {str(e)}", flush=True)
     return {
         "status": "success",
         "github_run_url": github_run_url,

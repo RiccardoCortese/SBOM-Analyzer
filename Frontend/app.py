@@ -216,16 +216,18 @@ if st.session_state.sbom_ready:
                 
                 with r_az:
                     clean_repo_name = c_url.replace("https://github.com/", "").replace("/", "-").replace(".git", "")
-                    expected_filename = f"{clean_repo_name}-sbom.json"
                     
-                    deep_results = st.session_state.get("deep_sbom_results", {})
-                    available_sboms = deep_results.get("sboms", {}) if deep_results else {}
+                    deep_results = st.session_state.get("deep_sbom_results") or {}
+                    available_sboms = deep_results.get("sboms", {})
                     
-                    if expected_filename in available_sboms:
+                    # Cerchiamo una chiave che contenga il nome pulito della repo, considerando che il backend potrebbe aver aggiunto suffissi o prefissi
+                    matching_key = next((k for k in available_sboms.keys() if clean_repo_name in k), None)
+                    
+                    if matching_key:
                         st.download_button(
                             label="⬇️ SBOM",
-                            data=available_sboms[expected_filename],
-                            file_name=expected_filename,
+                            data=available_sboms[matching_key],
+                            file_name=matching_key, 
                             mime="application/json",
                             key=f"dl_row_{clean_repo_name}_{idx}",
                             use_container_width=True
