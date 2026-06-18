@@ -22,7 +22,6 @@ GITHUB_API = "https://api.github.com/repos"
 MY_GITHUB_OWNER = os.getenv("MY_GITHUB_OWNER", "RiccardoCortese")
 MY_GITHUB_REPO = os.getenv("MY_GITHUB_REPO", "SBOM-Analyzer")
 
-print(f"[DEBUG] STORAGE_DIR: {STORAGE_DIR}", flush=True)
 
 
 # ============================================================
@@ -459,7 +458,6 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
             f"Trovati in Trivy (Poetry): {len([e for e in extracted_data if e['present_in_poetry'] == '✅'])}\n"
         )
 
-        # Output pulito: Nessuna chiave "docker_report" presente qui. Il calcolo Docker avverrà solo nell'altro endpoint.
         return {
             "status": "success",
             "repo": repo_url,
@@ -478,6 +476,7 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
         raise HTTPException(500, f"Errore interno del server: {str(e)}")
     finally:
         shutil.rmtree(tmp_clone, ignore_errors=True)
+
 # ============================================================
 # ANALISI COMPONENTI DEPENDENCIES.JSON IN PARALLELO (con github action remota) e generazione SBOM per singole dipendenze
 # ============================================================
@@ -524,7 +523,7 @@ def analyze_dependencies_sbom(repo_url: str, branch: str, path_dipendenze: str =
         if os.path.exists(folder):
             for file_name in os.listdir(folder):
                 if file_name.endswith("-sbom.json"):
-                    # CORREZIONE: Usa 'folder' invece di 'STORAGE_DIR' per creare il path
+                    
                     file_path = os.path.join(folder, file_name)
                     try:
                         with open(file_path, "r", encoding="utf-8") as f:
@@ -593,7 +592,6 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
 
     # Generazione dei grafi per la visualizzazione nel frontend
     docker_graph_results = generate_graphs_for_folder(STORAGE_DIR)
-    print (f"[BACKEND] Grafi generati per Docker SBOM: {list(docker_graph_results.keys())}", flush=True)
     
     # Calcolo Cross-Reference immediato per aggiornare i KPI del Frontend
     # Recuperiamo le informazioni del codice precedentemente salvate in STORAGE_DIR
@@ -645,7 +643,7 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
                         
         return all_names, all_purls
 
-    # 3. CHIAMA LA FUNZIONE E OTTIENI I SET PULITI
+    # Recuperiamo tutti i nomi e PURL dei componenti del codice per il confronto
     all_code_names, all_code_purls = get_all_code_identifiers()
 
     # Carichiamo i componenti appena scaricati dal Docker
@@ -679,8 +677,6 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
     
     all_code_names_only = {name.split('@')[0].lower().strip() for name in all_code_names}
     
-    print(f"[DEBUG] Esempio nomi nel codice: {list(all_code_names_only)[:5]}", flush=True)
-    
     # CONFRONTO OTTIMIZZATO
     for dc in docker_components:
         dc_name_clean = dc["name"].lower().strip()
@@ -711,8 +707,6 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
             else:
                 only_in_docker.append(dc)
                 
-    print(f"[DEBUG] Docker Components: {len(docker_components)}, In Common: {len(in_common)}, Only in Docker: {len(only_in_docker)}, Version Mismatches: {len(version_mismatches)}", flush=True)
-
     docker_report = {
         "total_docker_packages": len(docker_components),
         "packages_in_common_count": len(in_common),

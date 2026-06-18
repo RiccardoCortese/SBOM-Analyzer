@@ -4,8 +4,8 @@ import pandas as pd
 import json
 from streamlit_agraph import agraph, Node, Edge, Config
 
-st.set_page_config(page_title="TLSAssistant Flow", layout="wide")
-st.title("🛡️ SBOM Analyzer & Docker Cross-Reference")
+st.set_page_config(page_title="SBOM Analyzer", layout="wide")
+st.title("SBOM Analyzer")
 
 BACKEND_URL = "http://127.0.0.1:8000"
 
@@ -26,7 +26,7 @@ if "docker_analyzed" not in st.session_state:
     st.session_state.docker_analyzed = False
 
 # ============================================================
-# STEP 1: CONFIGURAZIONE TARGET & SBOM DI BASE
+# CONFIGURAZIONE TARGET & SBOM DI BASE
 # ============================================================
 st.subheader("1. Configurazione Target & SBOM di Base")
 
@@ -117,7 +117,7 @@ if st.button("🔄 Invia e Mantieni in Memoria sul Server"):
 st.markdown("---")
 
 # ============================================================
-# STEP 2: ANALISI COMPARATIVA DINAMICA & DEEP INSPECTION
+# ANALISI COMPARATIVA DINAMICA & DEEP INSPECTION
 # ============================================================
 if st.session_state.sbom_ready:
     st.subheader("2. Analisi Comparativa Dinamica")
@@ -185,7 +185,7 @@ if st.session_state.sbom_ready:
         raw_req = result.get("raw_requirements", None)
         raw_poe = result.get("raw_poetry", None)
         
-        # Correzione: Estrazione dinamica del report ad ogni ciclo di esecuzione dello stato
+        # Estrazione dinamica del report ad ogni ciclo di esecuzione dello stato
         docker_report = result.get("docker_report", {})
 
         st.markdown("---")
@@ -359,7 +359,6 @@ if st.session_state.sbom_ready:
                 else:
                     st.info("Nessun pacchetto extra rilevato.")
             
-           # Sostituisci il tuo blocco expander con questo:
             with st.expander(f"⚠️ Pacchetti con Versioni Differenti ({len(current_docker_report.get('version_mismatches', []))})"):
                 mismatches = current_docker_report.get("version_mismatches", [])
                 
@@ -388,12 +387,10 @@ if st.session_state.sbom_ready:
         st.subheader("Analisi delle Dipendenze (Grafo)")
 
         with st.container():
-            # Uniamo i grafi che arrivano da analisi diverse (Repo o Docker)
+            # Unione dei grafi che arrivano da analisi diverse (Repo o Docker)
             repo_graphs = st.session_state.get("deep_sbom_results", {}).get("graphs", {})
             docker_graphs = st.session_state.get("docker_results", {}).get("graphs", {})
             
-            print("Repo Graphs:", repo_graphs)
-            print("Docker Graphs:", docker_graphs)
             
             # Combiniamo i due dizionari
             all_graphs = {**repo_graphs, **docker_graphs}
@@ -402,7 +399,7 @@ if st.session_state.sbom_ready:
                 file_selezionato = st.selectbox(
                     "Seleziona lo SBOM da visualizzare nel grafo:", 
                     options=list(all_graphs.keys()),
-                    key="grafo_select" # Importante aggiungere una chiave univoca
+                    key="grafo_select" 
                 )
                 
                 graph_data = all_graphs[file_selezionato]
