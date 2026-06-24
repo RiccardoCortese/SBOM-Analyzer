@@ -16,151 +16,101 @@ on:
         default: 'dependencies.json'
 
 jobs:
-# ---------------------------------------------------
-# JOB 1 - PARSE DEPENDENCIES
-# ---------------------------------------------------
+  # --- JOB 1: ESTRAZIONE MATRICE ---
   parse-dependencies:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
-
     steps:
-      - name: Checkout target repo
+      - name: Checkout Target Repository
         uses: actions/checkout@v4
         with:
           repository: ${{ github.event.inputs.src_repository }}
           ref: ${{ github.event.inputs.src_branch }}
 
-      - name: Build dependency matrix
+      - name: Parse JSON to Matrix
         id: set-matrix
         run: |
-          FILE="${{ github.event.inputs.path_dipendenze }}"
-
-          echo "Using dependency file: $FILE"
-
-          if [ ! -f "$FILE" ]; then
-            echo "ERROR: file not found -> $FILE"
+          DEPENDENCIES=$(jq -c '[.[] | select(.url != null and (.url | contains("github.com"))) | .url]' ${{ github.event.inputs.path_dipendenze }})
+          if [ "$DEPENDENCIES" = "[]" ] || [ -z "$DEPENDENCIES" ]; then
+            echo "ERRORE: Nessuna URL GitHub valida trovata nel file JSON!"
             exit 1
           fi
+          echo "matrix=$DEPENDENCIES" >> $GITHUB_OUTPUT
 
-          MATRIX=$(jq -c '[.[] | select(.type == "git" or .type == "git-checkout" or .type == "git-submodule")]' "$FILE")
-
-          echo "Matrix: $MATRIX"
-
-          if [ "$MATRIX" = "[]" ] || [ -z "$MATRIX" ]; then
-            echo "No valid git dependencies found"
-            exit 1
-          fi
-
-          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
-
-# ---------------------------------------------------
-# JOB 2 - ANALISI PARALLELA
-# ---------------------------------------------------
+  # --- JOB 2: ANALISI IN PARALLELO CON TRIVY ---
   trivy-analysis:
     needs: parse-dependencies
     runs-on: ubuntu-latest
-
     strategy:
       matrix:
-        include: ${{ fromJson(needs.parse-dependencies.outputs.matrix) }}
+        repo_url: ${{ fromJson(needs.parse-dependencies.outputs.matrix) }}
       fail-fast: false
-
+    
     steps:
-      - name: Setup repo name
-        id: repo
+      - name: Clean up Repository Name
+        id: repo-info
         run: |
-          CLEAN=$(echo "${{ matrix.url }}" \
-            | sed 's|https://github.com/||' \
-            | sed 's|/|-|g' \
-            | sed 's|.git||')
-          echo "name=$CLEAN" >> $GITHUB_OUTPUT
+          CLEAN_NAME=$(echo "${{ matrix.repo_url }}" | sed 's|https://github.com/||' | sed 's|/|-|g' | sed 's|.git||')
+          echo "clean_name=$CLEAN_NAME" >> $GITHUB_OUTPUT
 
-      - name: Install dependencies
+      - name: Install Trivy CLI
         run: |
-          sudo apt-get update
-          sudo apt-get install -y git wget jq curl
+          sudo apt-get update && sudo apt-get install -y wget apt-transport-https gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update && sudo apt-get install -y trivy
 
-      # -------------------------------
-      # CLONE LOGIC INTELLIGENTE
-      # -------------------------------
-      - name: Clone repository
+      - name: Clone Dependency Repository
+        id: clone-step
         run: |
-          echo "Cloning ${{ matrix.url }}"
-          git clone --depth 1 ${{ matrix.url }} repo
+          git clone --depth 1 ${{ matrix.repo_url }} target_repo || echo "CLONE_FAILED=true" >> $GITHUB_ENV
 
-      # -------------------------------
-      # GIT-CHECKOUT HANDLING
-      # -------------------------------
-      - name: Apply checkout rules
-        if: matrix.type == 'git-checkout'
-        run: |
-          echo "Applying checkout: ${{ matrix.cmd }}"
-          cd repo
-          git fetch --all
-          git checkout ${{ matrix.cmd }}
-
-      # -------------------------------
-      # SUBMODULE HANDLING
-      # -------------------------------
-      - name: Init submodules
-        if: matrix.type == 'git-submodule'
-        run: |
-          cd repo
-          git submodule update --init --recursive
-
-      # -------------------------------
-      # SBOM GENERATION
-      # -------------------------------
-      - name: Generate SBOM with Trivy
+      - name: Generate CycloneDX SBOM
+        if: env.CLONE_FAILED != 'true'
         run: |
           trivy fs \
             --format cyclonedx \
             --scanners vuln \
-            --output "${{ steps.repo.outputs.name }}.json" \
-            repo/ || echo "TRIVY_FAILED=true" >> $GITHUB_ENV
+            --vuln-type library \
+            --output "${{ steps.repo-info.outputs.clean_name }}-sbom.json" \
+            target_repo/ || echo "TRIVY_FAILED=true" >> $GITHUB_ENV
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # fallback file
-      - name: Fallback if failed
-        if: env.TRIVY_FAILED == 'true'
+      - name: Create Fallback File on Failure
+        if: env.CLONE_FAILED == 'true' || env.TRIVY_FAILED == 'true'
         run: |
-          echo '{"status":"failed","repo":"${{ matrix.url }}", "message": "Failed to generate SBOM because of a Trivy error"}' > "${{ steps.repo.outputs.name }}.json"
+          echo '{"status": "failed", "repo": "${{ matrix.repo_url }}"}' > "${{ steps.repo-info.outputs.clean_name }}-sbom.json"
 
-      # upload per-repo artifact
-      - name: Upload artifact
+      # Carichiamo temporaneamente ogni file in un artifact univoco isolato per evitare sovrascritture concorrenti
+      - name: Upload Temporary Individual Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: tmp-${{ steps.repo.outputs.name }}
-          path: ${{ steps.repo.outputs.name }}.json
+          name: tmp-sbom-${{ steps.repo-info.outputs.clean_name }}
+          path: '${{ steps.repo-info.outputs.clean_name }}-sbom.json'
           retention-days: 1
 
-
-# ---------------------------------------------------
-# JOB 3 - MERGE FINAL SBOMS
-# ---------------------------------------------------
+  # --- JOB 3: UNIFICAZIONE FINALE DEGLI ARTIFACT ---
   merge-sboms:
-    needs: trivy-analysis
+    needs: [parse-dependencies, trivy-analysis]
     runs-on: ubuntu-latest
-
     steps:
-      - name: Create workspace
-        run: mkdir -p sboms
+      - name: Create Workspace Directory
+        run: mkdir -p combined-results
 
-      - name: Download artifacts
+      # Scarica tutti gli artifact generati nel job precedente che iniziano con 'tmp-sbom-'
+      - name: Download All Temporary Artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: tmp-*
-          path: sboms
+          pattern: tmp-sbom-*
+          path: combined-results
           merge-multiple: true
 
-      - name: Build final artifact
-        run: |
-          echo "Collected SBOMs:"
-          ls -R sboms
-
-      - name: Upload final SBOM bundle
+      # Raggruppa tutti i file json estratti e li impacchetta nell'unico artifact definitivo cercato dal backend
+      - name: Upload Consolidated Artifact to Backend
         uses: actions/upload-artifact@v4
         with:
           name: sbom-matrix-results
-          path: sboms/*.json
+          path: combined-results/*.json
           retention-days: 1
