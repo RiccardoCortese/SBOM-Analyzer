@@ -69,80 +69,65 @@ jobs:
   trivy-analysis:
     needs: parse-dependencies
     runs-on: ubuntu-latest
-
     strategy:
       matrix:
         include: ${{ fromJson(needs.parse-dependencies.outputs.matrix) }}
-      fail-fast: false
-
+    
     steps:
       - name: Setup repo name
         id: repo
         run: |
-          CLEAN=$(echo "${{ matrix.url }}" \
-            | sed 's|https://github.com/||' \
-            | sed 's|/|-|g' \
-            | sed 's|.git||')
+          VAL="${{ matrix.url }}"
+          [ -z "$VAL" ] && VAL="${{ matrix.path }}"
+          CLEAN=$(echo "$VAL" | sed 's|https://github.com/||' | sed 's|/|-|g' | sed 's|.git||')
           echo "name=$CLEAN" >> $GITHUB_OUTPUT
 
       - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y git wget jq curl
+        run: sudo apt-get update && sudo apt-get install -y git wget jq curl
 
-      # -------------------------------
-      # CLONE LOGIC INTELLIGENTE
-      # -------------------------------
-      - name: Clone repository
+      
+      - name: Prepare Workspace
         run: |
-          echo "Cloning ${{ matrix.url }}"
-          git clone --depth 1 ${{ matrix.url }} repo
+          if [ "${{ matrix.type }}" == "git" ]; then
+            git clone --depth 1 ${{ matrix.url }} repo
+          else
+            # Per checkout/submodule, clona la repo principale
+            git clone --depth 1 https://github.com/${{ github.event.inputs.src_repository }} repo
+          fi
 
-      # -------------------------------
-      # GIT-CHECKOUT HANDLING
-      # -------------------------------
-      - name: Apply checkout rules
-        if: matrix.type == 'git-checkout'
-        run: |
-          echo "Applying checkout: ${{ matrix.cmd }}"
-          cd repo
-          git fetch --all
-          git checkout ${{ matrix.cmd }}
-
-      # -------------------------------
-      # SUBMODULE HANDLING
-      # -------------------------------
-      - name: Init submodules
-        if: matrix.type == 'git-submodule'
+      - name: Apply git rules
         run: |
           cd repo
-          git submodule update --init --recursive
+          if [ "${{ matrix.type }}" == "git-checkout" ]; then
+            git fetch --all
+            git checkout ${{ matrix.cmd }}
+          elif [ "${{ matrix.type }}" == "git-submodule" ]; then
+            git submodule update --init --recursive ${{ matrix.path }}
+          fi
 
-      # -------------------------------
-      # SBOM GENERATION
-      # -------------------------------
       - name: Generate SBOM with Trivy
         run: |
+          if [ ! -d "repo" ] || [ -z "$(ls -A repo)" ]; then
+            echo "Directory 'repo' is empty or missing!"
+            exit 1
+          fi
           trivy fs \
             --format cyclonedx \
             --scanners vuln \
             --output "${{ steps.repo.outputs.name }}.json" \
             repo/ || echo "TRIVY_FAILED=true" >> $GITHUB_ENV
 
-      # fallback file
       - name: Fallback if failed
         if: env.TRIVY_FAILED == 'true'
         run: |
-          echo '{"status":"failed","repo":"${{ matrix.url }}", "message": "Failed to generate SBOM because of a Trivy error"}' > "${{ steps.repo.outputs.name }}.json"
+          echo '{"status":"failed","repo":"${{ matrix.url }}", "message": "Failed to generate SBOM"}' > "${{ steps.repo.outputs.name }}.json"
 
-      # upload per-repo artifact
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: tmp-${{ steps.repo.outputs.name }}
           path: ${{ steps.repo.outputs.name }}.json
           retention-days: 1
-
 
 # ---------------------------------------------------
 # JOB 3 - MERGE FINAL SBOMS
