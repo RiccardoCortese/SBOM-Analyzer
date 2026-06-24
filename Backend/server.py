@@ -346,6 +346,7 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
         github_run_url = None
         
         print("[BACKEND] Avvio trigger_github_action per analisi codice base...", flush=True)
+        print(f"[DEBUG] Parametri comparativi: repo_url={repo_url}, branch={branch}, path_dipendenze={path_dipendenze}, format={format}", flush=True)
         
         match = re.search(r"github\.com/([^/]+)/([^/?#]+)", repo_url)
         owner_repo = f"{match.group(1)}/{match.group(2).replace('.git', '')}" if match else repo_url
@@ -493,7 +494,8 @@ def compare_dependencies(repo_url: str, branch: str, path_dipendenze: str, forma
 @app.post("/analyze-dependencies-sbom")
 def analyze_dependencies_sbom(repo_url: str, branch: str, path_dipendenze: str = "dependencies.json"):
     workflow_name = "dynamic_sbom.yml"
-    print(f"[BACKEND] Innesco pipeline avanzata per singole dipendenze...", flush=True)
+    print(f"[BACKEND] Avvio pipeline avanzata per singole dipendenze...", flush=True)
+    print(f"[DEBUG] Parametri analisi dipendenze: repo_url={repo_url}, branch={branch}, path_dipendenze={path_dipendenze}", flush=True)
     
     match = re.search(r"github\.com/([^/]+)/([^/?#]+)", repo_url)
     owner_repo = f"{match.group(1)}/{match.group(2).replace('.git', '')}" if match else repo_url
@@ -602,60 +604,6 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
 
     # Generazione dei grafi per la visualizzazione nel frontend
     docker_graph_results = generate_graphs_for_folder(STORAGE_DIR)
-    
-    '''
-    # Calcolo Cross-Reference immediato per aggiornare i KPI del Frontend
-    # Recuperiamo le informazioni del codice precedentemente salvate in STORAGE_DIR
-    def extract_identifiers(file_name):
-        file_path = os.path.join(STORAGE_DIR, file_name)
-        if not os.path.exists(file_path): return set(), set()
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            identifiers = set()
-            purls = set()
-            components_list = data.get("components", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
-            for item in components_list:
-                if isinstance(item, dict):
-                    if item.get("name"):
-                        identifiers.add(str(item["name"]).lower().strip())
-                    if item.get("purl"):
-                        purls.add(str(item["purl"]).lower().strip())
-            return identifiers, purls
-        except Exception: return set(), set()
-
-    # Funzione per aggregare tutti i nomi e PURL dai file JSON generati (manifests e dependencies) per il confronto con lo SBOM Docker
-    def get_all_code_identifiers():
-        all_names = set()
-        all_purls = set()
-        
-        # Definiamo i file/pattern da ignorare assolutamente
-        ignore_files = {"docker_sbom.json", "cyclonedx-vuln-SBOM.json", "cyclonedx-license-SBOM.json"}
-        
-        target_dirs = [
-            os.path.join(STORAGE_DIR, "manifests"),
-            os.path.join(STORAGE_DIR, "dependencies")
-        ]
-        
-        for folder in target_dirs:
-            if not os.path.exists(folder):
-                continue
-                
-            # Usiamo walk solo dentro le cartelle che ci interessano
-            for root, dirs, files in os.walk(folder):
-                for file_name in files:
-                    if file_name.endswith(".json") and file_name not in ignore_files:
-                        file_path = os.path.join(root, file_name)
-                        
-                        n, p = extract_identifiers(file_path)
-                        all_names.update(n)
-                        all_purls.update(p)
-                        
-        return all_names, all_purls
-
-    # Recuperiamo tutti i nomi e PURL dei componenti del codice per il confronto
-    all_code_names, all_code_purls = get_all_code_identifiers()
-    '''
     
     def get_global_code_map():
         #Restituisce: { purl: [ {file: 'nomefile.json', name: '...', version: '...'}, ... ] }
