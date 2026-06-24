@@ -70,6 +70,7 @@ jobs:
     needs: parse-dependencies
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include: ${{ fromJson(needs.parse-dependencies.outputs.matrix) }}
     
@@ -153,6 +154,7 @@ jobs:
           ls -R sboms
 
       - name: Upload final SBOM bundle
+        if : always()
         uses: actions/upload-artifact@v4
         with:
           name: sbom-matrix-results
