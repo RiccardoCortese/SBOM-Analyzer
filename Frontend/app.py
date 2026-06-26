@@ -40,7 +40,7 @@ if "docker_analyzed" not in st.session_state:
 # ============================================================
 # CONFIGURAZIONE TARGET & SBOM DI BASE (Repo + SBOM Base + Docker)
 # ============================================================
-st.subheader("1. Configurazione Target & SBOM di Base")
+st.subheader("Configurazione Target & SBOM di Base")
 
 repo_url = st.text_input("GitHub Repository URL", value=st.session_state.saved_repo, placeholder="https://github.com/owner/repo")
 branch = st.text_input("Branch", value=st.session_state.saved_branch)
@@ -383,11 +383,11 @@ if st.session_state.analysis_results is not None:
         # SEZIONE DI ANALISI IMMAGINE DOCKER 
         # ============================================================
     st.markdown("---")
-    st.subheader("🐳 Sezione di Analisi Immagine Docker")
+    st.subheader("Sezione di Analisi Immagine Docker")
     
     if docker_choice == "Genera SBOM Docker":
         
-        if st.button("🐳 Avvia Generazione Pipeline & Confronto Docker", use_container_width=True):
+        if st.button("Avvia Generazione Pipeline & Confronto Docker", use_container_width=True):
         
             with st.spinner("Compilazione immagine in corso su GitHub Actions e analisi Trivy..."):
         
@@ -522,6 +522,7 @@ if st.session_state.analysis_results is not None:
                     data.append({
                         "Componente": item["name"],
                         "Versione": item["version"],
+                        "PURL": item.get("purl", "-"),
                         "File Sorgente (oltre a immagine docker)": ", ".join(sources)
                     })
                 st.dataframe(pd.DataFrame(data), use_container_width=True)
@@ -533,9 +534,14 @@ if st.session_state.analysis_results is not None:
             st. info("Questa sezione mostra i pacchetti presenti solo nell'immagine Docker. Si noti che alcune dipendenze possono essere presenti più volte con versioni diverse all'interno dello SBOM Docker. Questo perchè potrebbero esserci dei residui di build.")
             
             if current_docker_report.get("only_in_docker"):
-        
-                st.dataframe(pd.DataFrame(current_docker_report["only_in_docker"]), use_container_width=True)
-        
+                data = []
+                for item in current_docker_report["only_in_docker"]:
+                    data.append({
+                        "Componente": item["name"],
+                        "Versione": item["version"],
+                        "PURL": item.get("purl", "-")
+                    })
+                st.dataframe(pd.DataFrame(data), use_container_width=True)
             else:
         
                 st.info("Nessun pacchetto extra rilevato.")
