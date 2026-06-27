@@ -1,3 +1,5 @@
+from weakref import ref
+
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 import json
 import subprocess
@@ -167,6 +169,91 @@ def generate_graphs_for_folder(folder_path):
                 print(f"[ERROR] Impossibile generare grafo per {file_name}: {e}")
     return graphs
 
+# ============================================================
+# FUNZIONE DI SUPPORTO CHE RITORNA UN DIZIONARIO CON TUTTE LE DIPENDENZE DI TUTTI I FILE TROVATI NELLA CARTELLA STORAGE (poetry.lock, requirements.txt, dependencies.json)
+# ============================================================
+
+def get_all_dependecies(content):
+    try:
+        data = json.loads(content)
+        refs = []
+        deps = []
+        
+        # Estrazione riderimenti (usa 'bom-ref' come ID univoco se presente)
+        components = data.get("components", [])
+        for comp in components:
+            ref_id = comp.get("bom-ref") or comp.get("name")
+            refs.append({
+                "id": ref_id,
+                "label": comp.get("name")
+            })
+            
+        # Estrazione Dipendenze
+        dependencies = data.get("dependencies", [])
+        for dep in dependencies:
+            source = dep.get("ref")
+            for child in dep.get("dependsOn", []):
+                deps.append({
+                    "source": source,
+                    "target": child
+                })
+        return {"refs": refs, "deps": deps}
+    
+    except Exception as e:
+        print(f"[ERROR] Fallimento estrazione grafo: {e}")
+        return {"refs": [], "deps": []}
+
+
+# ============================================================
+# CREAZIONE DI UN ALBERO/GRAFO PER IL DOCKER CHE E' FLAT -> UNIFICA TUTTE LE DIPENDENZE IN UN'UNICA STRUTTURA GERARCHICA
+# ============================================================
+def build_universal_hierarchy(name_sbom_file_docker: str, folder_path: str):
+    
+    all_dependencies_data = {}
+    
+    # Raccolta dei file
+    search_paths = [os.path.join(folder_path, d) for d in ["manifests", "dependencies"] 
+                    if os.path.exists(os.path.join(folder_path, d))]
+    
+    for path in search_paths:
+        for file_name in os.listdir(path):
+            if file_name.endswith(".json"):
+                file_path = os.path.join(path, file_name)
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        all_dependencies_data[file_name] = get_all_dependecies(f.read())
+                except Exception as e:
+                    print(f"[ERROR] Impossibile elaborare {file_name}: {e}")
+
+    # Conversione "Grafo -> Mappa" (La traduzione necessaria)
+    unified_map = {}
+    for filename, data in all_dependencies_data.items():
+        for edge in data.get("deps", []):
+            source = edge.get("source")
+            target = edge.get("target")
+            if source not in unified_map:
+                unified_map[source] = {"dependencies": []}
+            if target not in unified_map[source]["dependencies"]:
+                unified_map[source]["dependencies"].append(target)
+
+    # Costruzione della Gerarchia Universale
+    with open(os.path.join(STORAGE_DIR, name_sbom_file_docker), "r") as f:
+        trivy_data = json.load(f)
+        sbom_components = trivy_data.get("components", [])
+    
+    hierarchy = {}
+    for comp in sbom_components:
+        purl = comp.get('purl')
+        if not purl: continue
+        # Colleghiamo il PURL alla sua lista di figli trovata nella unified_map
+        hierarchy[purl] = unified_map.get(purl, {}).get('dependencies', [])
+
+    for comp in sbom_components:
+        purl = comp.get('purl')
+        if purl and purl not in hierarchy:
+            hierarchy[purl] = []
+            
+    return hierarchy
 
 # ============================================================
 # LOGICA DI POLLING E SCARICAMENTO ARTIFACT
@@ -311,7 +398,6 @@ def remove_readonly(func, path, excinfo):
 async def upload_sbom(
     action: str = Form(...),
     mode: str = Form("manual"), # Default manuale
-    dockerfile_path: Optional[str] = Form(None),
     repo_url: Optional[str] = Form(None), # Necessario per clonare
     branch: Optional[str] = Form(None), # Necessario per clonare
     requirements_file: Optional[UploadFile] = File(None),
@@ -729,7 +815,7 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
     shutil.move(target_path, os.path.join(STORAGE_DIR, "docker_sbom.json"))
 
     # Generazione dei grafi per la visualizzazione nel frontend
-    docker_graph_results = generate_graphs_for_folder(STORAGE_DIR)
+    docker_graph_results = build_universal_hierarchy("docker_sbom.json", STORAGE_DIR)
     
     def get_global_code_map():
         #Restituisce: { purl: [ {file: 'nomefile.json', name: '...', version: '...'}, ... ] }

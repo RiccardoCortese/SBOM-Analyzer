@@ -596,13 +596,22 @@ if st.session_state.analysis_results is not None:
     st.subheader("Analisi delle Dipendenze (Grafo & Albero)")
 
     with st.container():
+        
         # Unione dei grafi che arrivano da analisi diverse (Repo o Docker)
         repo_graphs = st.session_state.get("deep_sbom_results", {}).get("graphs", {})
         docker_graphs = st.session_state.get("docker_results", {}).get("graphs", {})
         
         
+        normalized_docker_graphs = {}
+        for purl, deps in docker_graphs.items():
+            # normalizzazone dei nodi e archi per il grafo Docker
+            normalized_docker_graphs["Docker_SBOM"] = {
+                "nodes": [{"id": purl, "label": purl.split('/')[-1].split('@')[0]} for purl in docker_graphs.keys()],
+                "edges": [{"source": parent, "target": child} for parent, children in docker_graphs.items() for child in children]
+            }
+        
         # Combiniamo i due dizionari
-        all_graphs = {**repo_graphs, **docker_graphs}
+        all_graphs = {**repo_graphs, **normalized_docker_graphs}
         
         if all_graphs:
             col_a, col_b = st.columns([2, 1])
@@ -625,7 +634,7 @@ if st.session_state.analysis_results is not None:
             
             config = Config(
                 height=500, 
-                width=700, 
+                width="100%", 
                 directed=True, 
                 physics=not is_hierarchical, # Physics meno invasiva se è albero
                 hierarchical=is_hierarchical,
