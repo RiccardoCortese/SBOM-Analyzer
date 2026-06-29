@@ -36,6 +36,8 @@ if "deep_sbom_results" not in st.session_state:
     st.session_state.deep_sbom_results = None
 if "docker_analyzed" not in st.session_state:
     st.session_state.docker_analyzed = False
+if "docker_results" not in st.session_state:
+    st.session_state.docker_results = {"graphs": {}, "hierarchy_with_weights": {}}
 
 # ============================================================
 # CONFIGURAZIONE TARGET & SBOM DI BASE (Repo + SBOM Base + Docker)
