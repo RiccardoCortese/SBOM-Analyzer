@@ -125,7 +125,6 @@ def extract(item):
 # GRAPH DATA EXTRACTION per visualizzazione grafo
 # ============================================================
 def extract_graph_data(sbom_content):
-    """Trasforma un SBOM CycloneDX in formato nodo-arco per la visualizzazione."""
     try:
         data = json.loads(sbom_content)
         nodes = []
@@ -517,7 +516,6 @@ async def analyze_standard_file(
     branch: str = Form(...)
 ):
     # Logica per gestire "Entrambi"
-    print (f"[BACKEND] Analisi standard per formato: {format}, repo: {repo_url}, branch: {branch}", flush=True)
     files_da_analizzare = []
     if format == "Entrambi":
         files_da_analizzare = ["requirements", "poetry"] # Aggiungi quelli che vuoi
@@ -604,8 +602,6 @@ def analyze_custom_file(
     tmp_clone = tempfile.mkdtemp() # Creiamo una cartella temporanea per il clone del repository
     
     try:
-        print(f"[BACKEND] Modalità Avanzata: Parsing e Action per {path_file}", flush=True)
-    
     
     # Clone leggero del repository per estrarre il file dipendenze custom
         subprocess.run([
@@ -755,8 +751,6 @@ def analyze_dependencies_sbom(
         os.path.join(STORAGE_DIR, "dependencies")
     ]
     
-    print(f"[BACKEND] Lettura file SBOM nelle cartelle: {folders_to_scan}", flush=True)
-    
     # Scansione dei file SBOM generati e caricamento in memoria per la visualizzazione
     for folder in folders_to_scan:
         if os.path.exists(folder):
@@ -847,7 +841,6 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
             "weight": weight
         }
     
-    print(f"[BACKEND] hierarchy_with_weights: {json.dumps(hierarchy_with_weights, indent=2)}", flush=True)
     
     def get_global_code_map():
         #Restituisce: { purl: [ {file: 'nomefile.json', name: '...', version: '...'}, ... ] }

@@ -252,8 +252,6 @@ if "found_files" in st.session_state and st.session_state.found_files:
             
             with st.spinner("Invio richiesta al backend per generare SBOM standard..."):
                 try:
-                    print(f"[FRONTEND] Invio richiesta per analisi file custom: {custom_file}", flush=True)
-                    print (f"[FRONTEND] Repo: {st.session_state.saved_repo}, Branch: {st.session_state.saved_branch}", flush=True)
                     res = requests.post(
                         f"{BACKEND_URL}/analyze-custom-file",
                         data={
@@ -606,7 +604,6 @@ if st.session_state.analysis_results is not None:
         docker_graphs = st.session_state.get("docker_results", {}).get("graphs", {})
         hierarchy_with_weights = st.session_state.get("docker_results", {}).get("hierarchy_with_weights", {})
         
-        print(f"[FRONTEND] return: {st.session_state.get('docker_results', {})}", flush=True) 
         normalized_docker_graphs = {}
         for purl, deps in docker_graphs.items():
             # normalizzazone dei nodi e archi per il grafo Docker
@@ -650,8 +647,6 @@ if st.session_state.analysis_results is not None:
             
             agraph(nodes=nodes, edges=edges, config=config)
 
-            print(f"[FRONTEND] Visualizzazione grafo per {file_selezionato} con {len(nodes)} nodi e {len(edges)} archi.", flush=True)
-            print (f"[FRONTEND] hierarchy_with_weights: {hierarchy_with_weights}", flush=True)
             
             if file_selezionato == "Docker_SBOM" and hierarchy_with_weights:
                 st.divider()
