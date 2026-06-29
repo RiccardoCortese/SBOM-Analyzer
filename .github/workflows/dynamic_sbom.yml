@@ -51,18 +51,24 @@ jobs:
         run: |
           TYPE=$(echo '${{ toJson(matrix.item) }}' | jq -r '.type')
           URL=$(echo '${{ toJson(matrix.item) }}' | jq -r '.url // ""')
-          # Creazione di un nome file pulito per lo script Python
-          CLEAN_NAME=$(echo "$URL" | sed 's|https://||; s|http://||; s|/|-|g; s|\.||g' | cut -c 1-50)
-          [ -z "$CLEAN_NAME" ] && CLEAN_NAME="$TYPE-dependency"
-          echo "clean_name=$CLEAN_NAME" >> $GITHUB_OUTPUT
+          CMD=$(echo '${{ toJson(matrix.item) }}' | jq -r '.cmd // ""')
+          PATH_DIR=$(echo '${{ toJson(matrix.item) }}' | jq -r '.path // "."')
+          
+          echo "Processing $TYPE..."
 
-          # Esecuzione setup basata sul tipo (come definito nel tuo JSON)
           case $TYPE in
-            "git") git clone --depth 1 $URL target_repo ;;
-            "git-checkout") cd $(echo '${{ toJson(matrix.item) }}' | jq -r '.path') && git checkout $(echo '${{ toJson(matrix.item) }}' | jq -r '.cmd') ;;
-            "apt") sudo apt-get install -y $URL ;;
-            "pip") pip install $URL ;;
-            *) echo "Skipping setup for $TYPE" ;;
+            "git") git clone --depth 1 "$URL" target_repo ;;
+            "git-checkout") 
+                # Assicurati che la dir esista prima di fare checkout
+                [ -d "$PATH_DIR" ] && cd "$PATH_DIR" && git checkout "$CMD" || exit 1 ;;
+            "apt") sudo apt-get install -y "$URL" ;;
+            "pip") pip install "$URL" || echo "Pip install skipped or failed" ;;
+            "zip") wget -q "$URL" -O package.zip && unzip -o package.zip ;;
+            "file") wget -q "$URL" ;;
+            "cfg") wget -q "$URL" -O config_file ;;
+            "compile_maven") 
+                [ -d "$PATH_DIR" ] && cd "$PATH_DIR" && mvn clean install -DskipTests || exit 1 ;;
+            *) echo "Tipo $TYPE non gestito, salto..." ;;
           esac
 
       - name: Install Trivy
