@@ -16,57 +16,15 @@ on:
         default: 'dependencies.json'
 
 jobs:
-  # --- JOB 1: ESTRAZIONE MATRICE ---
-  parse-dependencies:
+  # --- JOB 1: PREPARAZIONE E ANALISI SEQUENZIALE ---
+  trivy-analysis:
     runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
       - name: Checkout Target Repository
         uses: actions/checkout@v4
         with:
           repository: ${{ github.event.inputs.src_repository }}
           ref: ${{ github.event.inputs.src_branch }}
-
-      - name: Parse JSON to Matrix
-        id: set-matrix
-        run: |
-          # Carica tutto il file JSON in una matrice
-          MATRIX=$(cat ${{ github.event.inputs.path_dipendenze }} | jq -c '.')
-          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
-
-  # --- JOB 2: ANALISI IN PARALLELO ---
-  trivy-analysis:
-    needs: parse-dependencies
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        item: ${{ fromJson(needs.parse-dependencies.outputs.matrix) }}
-      fail-fast: false
-    
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup and Build Environment
-        id: setup
-        run: |
-          TYPE=$(echo '${{ toJson(matrix.item) }}' | jq -r '.type')
-          URL=$(echo '${{ toJson(matrix.item) }}' | jq -r '.url // ""')
-          CMD=$(echo '${{ toJson(matrix.item) }}' | jq -r '.cmd // ""')
-          PATH_DIR=$(echo '${{ toJson(matrix.item) }}' | jq -r '.path // "."')
-          
-          echo "Processing $TYPE..."
-
-          case $TYPE in
-              "git") git clone --depth 1 "$URL" || echo "Git clone fallito per $URL, proseguo comunque" ;;
-              "git-checkout") cd "$PATH_DIR" && git checkout "$CMD" || echo "Checkout fallito, proseguo" ;;
-              "git-submodule") cd "$PATH_DIR" && git submodule $CMD || echo "Submodule fallito, proseguo" ;;
-              "apt") sudo apt-get install -y "$URL" || echo "Apt install fallito, proseguo" ;;
-              "pip") pip install "$URL" || echo "Pip install fallito, proseguo" ;;
-              "compile_maven") cd "$PATH_DIR" && mvn clean install -DskipTests || echo "Maven build fallito, proseguo" ;;
-              "zip") wget -q "$URL" -O pkg.zip && unzip -o pkg.zip || echo "Zip download/unzip fallito, proseguo" ;;
-              "file" | "cfg") wget -q "$URL" || echo "Download file fallito, proseguo" ;;
-              *) echo "Tipo $TYPE non gestito, salto." ;;
-          esac
 
       - name: Install Trivy
         run: |
@@ -75,20 +33,44 @@ jobs:
           echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
           sudo apt-get update && sudo apt-get install -y trivy
 
-      - name: Generate CycloneDX SBOM
+      - name: Setup and Build Environment
         run: |
-          trivy fs --format cyclonedx --output "${{ steps.setup.outputs.clean_name }}-sbom.json" .
+          # Legge il JSON e itera riga per riga in ordine cronologico
+          cat ${{ github.event.inputs.path_dipendenze }} | jq -c '.[]' | while read i; do
+            TYPE=$(echo $i | jq -r '.type')
+            URL=$(echo $i | jq -r '.url // ""')
+            CMD=$(echo $i | jq -r '.cmd // ""')
+            PATH_DIR=$(echo $i | jq -r '.path // "."')
+            
+            # Genera nome file compatibile con il tuo script Python
+            CLEAN_NAME=$(echo "$URL$TYPE" | sed 's|https://||; s|http://||; s|/|-|g; s|\.||g' | cut -c 1-50)
+            
+            echo ">>> Elaborazione: $TYPE"
+            case $TYPE in
+              "git") git clone --depth 1 "$URL" target_repo || true ;;
+              "git-checkout") cd "$PATH_DIR" && git checkout "$CMD" || true ;;
+              "git-submodule") cd "$PATH_DIR" && git submodule $CMD || true ;;
+              "apt") sudo apt-get install -y "$URL" || true ;;
+              "pip") pip install "$URL" || true ;;
+              "compile_maven") cd "$PATH_DIR" && mvn clean install -DskipTests || true ;;
+              "zip") wget -q "$URL" -O pkg.zip && unzip -o pkg.zip || true ;;
+              "file" | "cfg") wget -q "$URL" || true ;;
+            esac
+            
+            # Genera SBOM per la singola dipendenza appena processata
+            trivy fs --format cyclonedx --output "tmp-sbom-${CLEAN_NAME}.json" .
+          done
 
-      - name: Upload Temporary Individual Artifact
+      - name: Upload Temporary Individual Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: tmp-sbom-${{ steps.setup.outputs.clean_name }}
-          path: '${{ steps.setup.outputs.clean_name }}-sbom.json'
+          name: tmp-sbom-artifacts
+          path: tmp-sbom-*.json
           retention-days: 1
 
-  # --- JOB 3: UNIFICAZIONE FINALE ---
+  # --- JOB 2: UNIFICAZIONE FINALE ---
   merge-sboms:
-    needs: [parse-dependencies, trivy-analysis]
+    needs: trivy-analysis
     runs-on: ubuntu-latest
     steps:
       - name: Create Workspace Directory
@@ -97,7 +79,7 @@ jobs:
       - name: Download All Temporary Artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: tmp-sbom-*
+          name: tmp-sbom-artifacts
           path: combined-results
           merge-multiple: true
 
