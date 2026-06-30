@@ -26,12 +26,13 @@ jobs:
       - uses: actions/checkout@v4
       - id: set-matrix
         run: |
-          MATRIX=$(cat ${{ github.event.inputs.path_dipendenze }} | jq -c '.')
+          MATRIX=$(jq -c '.' ${{ github.event.inputs.path_dipendenze }})
           echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
 
   # --- JOB 1: ANALISI IN PARALLELO (MATRIX) ---
   trivy-analysis:
     needs: parse-dependencies
+    if: ${{ needs.parse-dependencies.outputs.matrix != '' }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
