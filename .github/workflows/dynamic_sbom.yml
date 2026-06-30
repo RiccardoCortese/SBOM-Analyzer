@@ -58,14 +58,14 @@ jobs:
             esac
             
             # Genera SBOM per la singola dipendenza appena processata
-            trivy fs --format cyclonedx --output "tmp-sbom-${CLEAN_NAME}.json" .
+            trivy fs --format cyclonedx --output "${CLEAN_NAME}-sbom.json" .
           done
 
       - name: Upload Temporary Individual Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: tmp-sbom-artifacts
-          path: tmp-sbom-*.json
+          path: "*-sbom.json"
           retention-days: 1
 
   # --- JOB 2: UNIFICAZIONE FINALE ---
