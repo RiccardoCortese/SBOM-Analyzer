@@ -75,8 +75,9 @@ jobs:
             "apt") sudo apt-get install -y "$URL" && cp /var/lib/dpkg/status workspace_analisi/ ;;
 
             "pip") # Creiamo un ambiente virtuale per isolare l'installazione dei pacchetti Python
+                  CLEAN_URL=$(echo "$URL" | xargs)
                   python3 -m venv workspace_analisi/venv
-                  ./workspace_analisi/venv/bin/pip install --no-cache-dir "$URL"
+                  ./workspace_analisi/venv/bin/pip install --no-cache-dir -r "$CLEAN_URL"
                   ./workspace_analisi/venv/bin/pip freeze > workspace_analisi/requirements.txt
                   ;;
 
