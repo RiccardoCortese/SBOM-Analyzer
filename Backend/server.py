@@ -175,32 +175,40 @@ def generate_graphs_for_folder(folder_path):
 def get_all_dependecies(content):
     try:
         data = json.loads(content)
-        refs = []
-        deps = []
         
-        # Estrazione riderimenti (usa 'bom-ref' come ID univoco se presente)
-        components = data.get("components", [])
-        for comp in components:
-            ref_id = comp.get("bom-ref") or comp.get("name")
-            refs.append({
-                "id": ref_id,
-                "label": comp.get("name")
-            })
-            
-        # Estrazione Dipendenze
+        # Creiamo una mappa di risoluzione: UUID/ref -> PURL/Name
+        # Questo permette di tradurre "572ec16b..." in un nome leggibile
+        ref_map = {}
+        for comp in data.get("components", []):
+            ref_id = comp.get("bom-ref")
+            # Usiamo il purl se esiste, altrimenti il nome
+            display_name = comp.get("purl") or comp.get("name")
+            if ref_id:
+                # Crezione della mappa solo se abbiamo un ref_id valido
+                ref_map[ref_id] = display_name
+        
+        deps = []
+        # Estrazione Dipendenze con risoluzione
         dependencies = data.get("dependencies", [])
         for dep in dependencies:
-            source = dep.get("ref")
+            # Estraiamo la sorgente (ref) e traduciamo in nome leggibile se possibile
+            raw_source = dep.get("ref")
+            # Traduciamo la sorgente (se è un UUID, cerchiamo il suo PURL/nome)
+            source = ref_map.get(raw_source, raw_source)
+            
             for child in dep.get("dependsOn", []):
+                # Traduciamo il target (se è un UUID, cerchiamo il suo PURL/nome)
+                target = ref_map.get(child, child)
                 deps.append({
                     "source": source,
-                    "target": child
+                    "target": target
                 })
-        return {"refs": refs, "deps": deps}
+        
+        return {"deps": deps}
     
     except Exception as e:
         print(f"[ERROR] Fallimento estrazione grafo: {e}")
-        return {"refs": [], "deps": []}
+        return {"deps": []}
 
 
 # ============================================================
@@ -225,7 +233,6 @@ def build_universal_hierarchy(name_sbom_file_docker: str, folder_path: str):
                 except Exception as e:
                     print(f"[ERROR] Impossibile elaborare {file_name}: {e}")
                     
-    print (f"[DEBUG] Tutti i dati delle dipendenze raccolti: {list(all_dependencies_data.keys())}", flush=True)
 
     # Conversione in un'unica mappa di dipendenze per facilitare la costruzione della gerarchia totale
     unified_map = {}
