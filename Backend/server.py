@@ -224,6 +224,8 @@ def build_universal_hierarchy(name_sbom_file_docker: str, folder_path: str):
                         all_dependencies_data[file_name] = get_all_dependecies(f.read())
                 except Exception as e:
                     print(f"[ERROR] Impossibile elaborare {file_name}: {e}")
+                    
+    print (f"[DEBUG] Tutti i dati delle dipendenze raccolti: {list(all_dependencies_data.keys())}", flush=True)
 
     # Conversione in un'unica mappa di dipendenze per facilitare la costruzione della gerarchia totale
     unified_map = {}

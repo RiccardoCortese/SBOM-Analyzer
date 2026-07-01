@@ -71,11 +71,20 @@ jobs:
           
           case $TYPE in
             "git") git clone --depth 1 "$URL" workspace_analisi/repo ;;
+
             "apt") sudo apt-get install -y "$URL" && cp /var/lib/dpkg/status workspace_analisi/ ;;
-            "pip") pip install "$URL" && pip show "$URL" > workspace_analisi/pkg_info.txt ;;
+
+            "pip") # Creiamo un ambiente virtuale per isolare l'installazione dei pacchetti Python
+                  python3 -m venv workspace_analisi/venv
+                  ../workspace_analisi/venv/bin/pip install --upgrade pip
+                  ./workspace_analisi/venv/bin/pip install "$URL";;
+
             "compile_maven") cd "$PATH_DIR" && mvn clean install -DskipTests && cp -r . workspace_analisi/ ;;
+
             "zip") wget -q "$URL" -O pkg.zip && unzip -o pkg.zip -d workspace_analisi/ ;;
+
             "file" | "cfg") wget -q "$URL" -O workspace_analisi/file_target ;;
+
           esac
           
           # ANALISI ISOLATA: Trivy guarda SOLO dentro 'workspace_analisi', in modo da non contaminare l'ambiente globale

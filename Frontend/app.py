@@ -499,7 +499,7 @@ if st.session_state.analysis_results is not None:
         
         with dl_col1:
             st.download_button(
-                label="⬇️ Scarica Report degli elementi SOLO nel Docker (JSON deviazioni)",
+                label="⬇️ Scarica Report degli elementi SOLO nel Docker",
                 data=json.dumps(current_docker_report, indent=2),
                 file_name="docker_cross_reference_report.json",
                 mime="application/json",
