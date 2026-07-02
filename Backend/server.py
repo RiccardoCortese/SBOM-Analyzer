@@ -26,6 +26,7 @@ GITHUB_API = "https://api.github.com/repos"
 MY_GITHUB_OWNER = os.getenv("MY_GITHUB_OWNER", "RiccardoCortese")
 MY_GITHUB_REPO = os.getenv("MY_GITHUB_REPO", "SBOM-Analyzer")
 STANDARD_FILE_ANALYZED = None  # Variabile globale per memorizzare il file standard analizzato
+GITHUB_REF = "v2.0-tlsassistant"  # Branch o tag da cui partire per le GitHub Actions CAMBIARE AD OGNI BRANCH
 
 
 # ============================================================
@@ -380,7 +381,7 @@ def trigger_github_action(workflow_file: str, inputs: dict) -> Optional[dict]:
     # URL dinamico basato sul file .yml passato come argomento
     url_dispatch = f"{GITHUB_API}/{MY_GITHUB_OWNER}/{MY_GITHUB_REPO}/actions/workflows/{workflow_file}/dispatches"
     payload = {
-        "ref": "main",
+        "ref": GITHUB_REF,
         "inputs": inputs
     }
 
