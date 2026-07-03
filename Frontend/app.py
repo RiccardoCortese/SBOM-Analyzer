@@ -24,7 +24,7 @@ if "sbom_ready" not in st.session_state:
 if "saved_repo" not in st.session_state:
     st.session_state.saved_repo = ""
 if "saved_branch" not in st.session_state:
-    st.session_state.saved_branch = "develop"
+    st.session_state.saved_branch = "dev"
 if "saved_format" not in st.session_state:
     st.session_state.saved_format = "entrambi"
 if "analysis_results" not in st.session_state:
@@ -132,7 +132,8 @@ if st.button("🔄 Invia e Avvia Discovery"):
                 st.success(f"Configurazione accettata: {risposta.get('message')}")
                 
                 if "files" in risposta:
-                    st.session_state.found_files = risposta["files"]
+                    st.session_state.found_files = risposta.get("files", [])
+                    st.session_state.docker_insights = risposta.get("docker_insights", {})
                     st.info(f"Ho trovato {len(st.session_state.found_files)} file di dipendenze.")
                 st.rerun()
             else:
@@ -144,17 +145,28 @@ if st.button("🔄 Invia e Avvia Discovery"):
             st.error(f"Errore di connessione: {str(e)}")
             
 if "found_files" in st.session_state and st.session_state.found_files:
-    # DEFINIAMO CHI SONO I FILE "STANDARD"
-    standard_files = ["requirements.txt", "poetry.lock", "pyproject.toml"]
-    
-    # FILTRIAMO LE LISTE
-    standard_found = [f for f in st.session_state.found_files if f in standard_files]
-    custom_found = [f for f in st.session_state.found_files if f not in standard_files]
+    # Recuperiamo le analisi dal session_state (se le hai salvate lì dal backend)
+    insights = st.session_state.get("docker_insights", {})
     
     st.subheader("📦 File di dipendenze rilevati")
     
+    # Visualizzazione dinamica
     for file_name in st.session_state.found_files:
-        st.markdown(f"📄 **{file_name}**")
+        # Se il file è collegato a un insight, aggiungiamo una nota
+        badge = ""
+        if file_name == "pyproject.toml" and insights.get("uses_poetry"):
+            badge = "🔥 (Poetry Rilevato)"
+        elif file_name == "requirements.txt" and insights.get("uses_pip"):
+            badge = "🐍 (Standard Pip)"
+            
+        st.markdown(f"📄 **{file_name}** {badge}")
+
+    # Visualizzazione delle intuizioni Docker (Insight)
+    if insights:
+        with st.expander("🔍 Dockerfile Insights"):
+            st.write(f"**Base Image:** {', '.join(insights.get('base_image', []))}")
+            st.write(f"**Multi-stage build:** {'Sì' if insights.get('is_multistage') else 'No'}")
+            st.write(f"**Package Manager:** {'UV' if insights.get('uses_uv') else 'Pip/Poetry'}")
 
     st.markdown("---")
     
@@ -166,7 +178,7 @@ if "found_files" in st.session_state and st.session_state.found_files:
     
     format_type = st.selectbox(
         "Seleziona il formato da cui generare SBOM tramite la pipeline:",
-        options=standard_found + ["Entrambi"],
+        options=st.session_state.found_files + ["Entrambi"],
         format_func=lambda x: x.capitalize()
     )
     
@@ -238,7 +250,7 @@ if "found_files" in st.session_state and st.session_state.found_files:
     
     custom_file = st.selectbox(
         "Seleziona il fileda analizzare:",
-        options=custom_found,
+        options=st.session_state.found_files,
         format_func=lambda x: x.capitalize()
     )
     
@@ -402,337 +414,337 @@ if st.session_state.analysis_results is not None:
         # ============================================================
         # SEZIONE DI ANALISI IMMAGINE DOCKER 
         # ============================================================
-    st.markdown("---")
-    st.subheader("Sezione di Analisi Immagine Docker")
+st.markdown("---")
+st.subheader("Sezione di Analisi Immagine Docker")
+
+if docker_choice == "Genera SBOM Docker":
     
-    if docker_choice == "Genera SBOM Docker":
-        
-        if st.button("Avvia Generazione Pipeline & Confronto Docker", use_container_width=True):
-        
-            with st.spinner("Compilazione immagine in corso su GitHub Actions e analisi Trivy..."):
-        
-                try:
-        
-                    res_docker = requests.post(
-                        f"{BACKEND_URL}/generate-docker-sbom",
-                        params={
-                            "repo_url": st.session_state.saved_repo,
-                            "branch": st.session_state.saved_branch,
-                            "docker_target": docker_image_tag,
-                            "vuln_type": vuln_type
-                        }
-                    )
-        
-                    if res_docker.status_code == 200:
-        
-                        response_data = res_docker.json()
-        
-                        if "graphs" in response_data:
-        
-                            st.session_state["docker_results"]["graphs"] = response_data["graphs"]
-                        
-                        if "hierarchy_with_weights" in response_data:
-        
-                            st.session_state["docker_results"]["hierarchy_with_weights"] = response_data["hierarchy_with_weights"]
-                        
-                        if "docker_report" in response_data:
-        
-                            # Se esiste già un'analisi del codice base, iniettiamo i dati Docker al suo interno
-        
-                            if st.session_state.analysis_results is not None:
-        
-                                st.session_state.analysis_results["docker_report"] = response_data["docker_report"]
-                                st.session_state.analysis_results["raw_docker_sbom"] = response_data.get("raw_docker_sbom", "")
-        
-                            else:
-        
-                                # Fallback: se l'utente non ha premuto il Bottone 1, creiamo la struttura minima
-                                st.session_state.analysis_results = {
-                                    "result": [],
-                                    "docker_report": response_data["docker_report"],
-                                    "raw_docker_sbom": response_data.get("raw_docker_sbom", "")
-                                }
-                        
-                        st.session_state.docker_analyzed = True
-                        st.success("SBOM Docker generato con successo! Statistiche aggiornate sotto.")
-                        st.rerun()
-        
-                    else:
-                        st.error(f"Errore generazione Docker: {res_docker.text}")
-        
-                except Exception as e:
-                    st.error(f"Errore di connessione: {str(e)}")
-
-    elif docker_choice == "Carica SBOM Docker esistente (JSON)":
-        
-        if docker_file and not st.session_state.docker_analyzed:
-        
-            if st.button("📊 Applica File Docker Caricato al Confronto", use_container_width=True):
-        
-                # Se si carica manualmente lo SBOM, ci assicuriamo che esista un contenitore in session_state
-                if st.session_state.analysis_results is None:
-        
-                    st.session_state.analysis_results = {"result": [], "docker_report": {}}
-                
-                try:
-                    # Parsing del file caricato dall'utente e inserimento nello stato
-                    uploaded_content = json.loads(docker_file.getvalue().decode("utf-8"))
+    if st.button("Avvia Generazione Pipeline & Confronto Docker", use_container_width=True):
+    
+        with st.spinner("Compilazione immagine in corso su GitHub Actions e analisi Trivy..."):
+    
+            try:
+    
+                res_docker = requests.post(
+                    f"{BACKEND_URL}/generate-docker-sbom",
+                    params={
+                        "repo_url": st.session_state.saved_repo,
+                        "branch": st.session_state.saved_branch,
+                        "docker_target": docker_image_tag,
+                        "vuln_type": vuln_type
+                    }
+                )
+    
+                if res_docker.status_code == 200:
+    
+                    response_data = res_docker.json()
+    
+                    if "graphs" in response_data:
+    
+                        st.session_state["docker_results"]["graphs"] = response_data["graphs"]
+                    
+                    if "hierarchy_with_weights" in response_data:
+    
+                        st.session_state["docker_results"]["hierarchy_with_weights"] = response_data["hierarchy_with_weights"]
+                    
+                    if "docker_report" in response_data:
+    
+                        # Se esiste già un'analisi del codice base, iniettiamo i dati Docker al suo interno
+    
+                        if st.session_state.analysis_results is not None:
+    
+                            st.session_state.analysis_results["docker_report"] = response_data["docker_report"]
+                            st.session_state.analysis_results["raw_docker_sbom"] = response_data.get("raw_docker_sbom", "")
+    
+                        else:
+    
+                            # Fallback: se l'utente non ha premuto il Bottone 1, creiamo la struttura minima
+                            st.session_state.analysis_results = {
+                                "result": [],
+                                "docker_report": response_data["docker_report"],
+                                "raw_docker_sbom": response_data.get("raw_docker_sbom", "")
+                            }
+                    
                     st.session_state.docker_analyzed = True
+                    st.success("SBOM Docker generato con successo! Statistiche aggiornate sotto.")
                     st.rerun()
-        
-                except Exception as e:
-                    st.error(f"Errore nel parsing del file JSON caricato: {str(e)}")
+    
+                else:
+                    st.error(f"Errore generazione Docker: {res_docker.text}")
+    
+            except Exception as e:
+                st.error(f"Errore di connessione: {str(e)}")
 
-    # --- RE-ESTRAZIONE DATI AGGIORNATI DA SESSION STATE PER IL RENDERING ---
-    current_results = st.session_state.analysis_results if st.session_state.analysis_results else {}
-    current_docker_report = current_results.get("docker_report", {})
+elif docker_choice == "Carica SBOM Docker esistente (JSON)":
+    
+    if docker_file and not st.session_state.docker_analyzed:
+    
+        if st.button("📊 Applica File Docker Caricato al Confronto", use_container_width=True):
+    
+            # Se si carica manualmente lo SBOM, ci assicuriamo che esista un contenitore in session_state
+            if st.session_state.analysis_results is None:
+    
+                st.session_state.analysis_results = {"result": [], "docker_report": {}}
+            
+            try:
+                # Parsing del file caricato dall'utente e inserimento nello stato
+                uploaded_content = json.loads(docker_file.getvalue().decode("utf-8"))
+                st.session_state.docker_analyzed = True
+                st.rerun()
+    
+            except Exception as e:
+                st.error(f"Errore nel parsing del file JSON caricato: {str(e)}")
 
-    # Rendering dei risultati dinamici basati sullo stato aggiornato
-    if st.session_state.docker_analyzed and current_docker_report and current_docker_report.get("total_docker_packages", 0) > 0:
-        
-        st.markdown("#### 📊 Statistiche e Deviazioni dell'Immagine Docker")
-        
-        kpi1, kpi2, kpi3, kpi4, kpi5, kpi6 = st.columns(6)
-        kpi1.metric("Totale Pacchetti nel Docker", current_docker_report.get("total_docker_packages", 0))
-        kpi2.metric("Totale Pacchetti Unici nel Docker", current_docker_report.get("total_unique_docker_packages", 0))
-        kpi3.metric("✅ In Comune con i Sorgenti", current_docker_report.get("packages_in_common_count", 0))
-        kpi4.metric("⚠️ Esclusivi Docker", current_docker_report.get("packages_only_in_docker_count", 0))
-        kpi5.metric("❗ Versioni Differenti (Tra Docker e Sorgenti)", current_docker_report.get("packages_with_version_mismatches_count", 0))
-        kpi6.metric("❌ Mancanti nel Docker", current_docker_report.get("packages_missing_in_docker_count", 0))
+# --- RE-ESTRAZIONE DATI AGGIORNATI DA SESSION STATE PER IL RENDERING ---
+current_results = st.session_state.analysis_results if st.session_state.analysis_results else {}
+current_docker_report = current_results.get("docker_report", {})
 
-        raw_docker_sbom = current_results.get("raw_docker_sbom", "")
+# Rendering dei risultati dinamici basati sullo stato aggiornato
+if st.session_state.docker_analyzed and current_docker_report and current_docker_report.get("total_docker_packages", 0) > 0:
+    
+    st.markdown("#### 📊 Statistiche e Deviazioni dell'Immagine Docker")
+    
+    kpi1, kpi2, kpi3, kpi4, kpi5, kpi6 = st.columns(6)
+    kpi1.metric("Totale Pacchetti nel Docker", current_docker_report.get("total_docker_packages", 0))
+    kpi2.metric("Totale Pacchetti Unici nel Docker", current_docker_report.get("total_unique_docker_packages", 0))
+    kpi3.metric("✅ In Comune con i Sorgenti", current_docker_report.get("packages_in_common_count", 0))
+    kpi4.metric("⚠️ Esclusivi Docker", current_docker_report.get("packages_only_in_docker_count", 0))
+    kpi5.metric("❗ Versioni Differenti (Tra Docker e Sorgenti)", current_docker_report.get("packages_with_version_mismatches_count", 0))
+    kpi6.metric("❌ Mancanti nel Docker", current_docker_report.get("packages_missing_in_docker_count", 0))
 
-        # Colonne per i bottoni di download
-        dl_col1, dl_col2 = st.columns(2)
-        
-        with dl_col1:
+    raw_docker_sbom = current_results.get("raw_docker_sbom", "")
+
+    # Colonne per i bottoni di download
+    dl_col1, dl_col2 = st.columns(2)
+    
+    with dl_col1:
+        st.download_button(
+            label="⬇️ Scarica Report degli elementi SOLO nel Docker",
+            data=json.dumps(current_docker_report, indent=2),
+            file_name="docker_cross_reference_report.json",
+            mime="application/json",
+            use_container_width=True
+        )
+    
+    with dl_col2:
+    
+        if raw_docker_sbom:
+    
             st.download_button(
-                label="⬇️ Scarica Report degli elementi SOLO nel Docker",
-                data=json.dumps(current_docker_report, indent=2),
-                file_name="docker_cross_reference_report.json",
+                label="⬇️ Scarica SBOM Docker Completo",
+                data=raw_docker_sbom,
+                file_name="cyclonedx-SBOM.json",
                 mime="application/json",
                 use_container_width=True
             )
-        
-        with dl_col2:
-        
-            if raw_docker_sbom:
-        
-                st.download_button(
-                    label="⬇️ Scarica SBOM Docker Completo",
-                    data=raw_docker_sbom,
-                    file_name="cyclonedx-SBOM.json",
-                    mime="application/json",
-                    use_container_width=True
-                )
-        
-            else:
-        
-                st.button(
-                    label="🚫 SBOM Docker originale non disponibile",
-                    disabled=True,
-                    use_container_width=True
-                )
-        
-
-        with st.expander(f"🟢 Pacchetti comuni tra Docker e Sorgente ({current_docker_report.get('packages_in_common_count', 0)})"):
-            if current_docker_report.get("in_common"):
-                
-                data = []
-                for item in current_docker_report["in_common"]:
-                    sources = [f["source"] for f in item.get("source_files", [])]
-                    data.append({
-                        "Componente": item["name"],
-                        "Versione": item["version"],
-                        "PURL": item.get("purl", "-"),
-                        "File Sorgente (oltre a immagine docker)": ", ".join(sources)
-                    })
-                st.dataframe(pd.DataFrame(data), use_container_width=True)
-            else:
-                st.info("Nessuna corrispondenza trovata.")
-        
-        
-        with st.expander(f"🔴 Pacchetti solo dentro l'Immagine Docker ({current_docker_report.get('packages_only_in_docker_count', 0)})"):
-            st. info("Questa sezione mostra i pacchetti presenti solo nell'immagine Docker. Si noti che alcune dipendenze possono essere presenti più volte con versioni diverse all'interno dello SBOM Docker. Questo perchè potrebbero esserci dei residui di build.")
-            
-            if current_docker_report.get("only_in_docker"):
-                data = []
-                for item in current_docker_report["only_in_docker"]:
-                    data.append({
-                        "Componente": item["name"],
-                        "Versione": item["version"],
-                        "PURL": item.get("purl", "-")
-                    })
-                st.dataframe(pd.DataFrame(data), use_container_width=True)
-            else:
-        
-                st.info("Nessun pacchetto extra rilevato.")
-        
-        with st.expander(f"⚠️ Pacchetti con Versioni Differenti ({len(current_docker_report.get('version_mismatches', []))})"):
-            mismatches = current_docker_report.get("version_mismatches", [])
-            if mismatches:
-                df_mismatch = pd.DataFrame([
-                    {
-                        "Componente": m["docker"]["name"],
-                        "Versione Docker": m["docker"].get("version", "-"),
-                        "Versione Sorgente": m.get("code_version", "-"),
-                        "File Sorgente": ", ".join([f["source"] for f in m.get("source_files", [])])
-                    } for m in mismatches
-                ])
-                st.dataframe(df_mismatch, use_container_width=True)
-            else:
-                st.info("Nessuna discrepanza di versione rilevata.")
-            
-        with st.expander(f"❌ Pacchetti Mancanti nel Docker SBOM ({len(current_docker_report.get('missing_in_docker', []))})"):
-            st. info("Questa sezione mostra le dipendenze che sono presenti nei sorgenti della repository ma non sono state rilevate nell'immagine Docker. Questo può indicare che alcune librerie non sono state incluse nella build dell'immagine.")
-            missing_in_docker = current_docker_report.get("missing_in_docker", [])
-            
-            if missing_in_docker:
-                # Creazione di un DataFrame per visualizzare le dipendenze mancanti in modo tabellare
-                df_missing = pd.DataFrame([
-                    {
-                        "Componente": m.get("name", "-"),
-                        "Versione Sorgente": m.get("version", "-"),
-                        "PURL": m.get("purl", "-"),
-                        "File Sorgente (oltre a immagine docker)": ", ".join(m.get("files", []))
-                    } for m in missing_in_docker
-                ])
-                st.dataframe(df_missing, use_container_width=True)
-        
-            else:
-                st.info("Nessuna dipendenza mancante rilevata nel Docker SBOM.")
-    else:
-        
-        if docker_choice == "Genera SBOM Docker":
-        
-            st.info("💡 Clicca sul pulsante sopra per avviare la compilazione remota dell'immagine Docker e analizzarla.")
-        
-        else:
-        
-            st.info("💡 Carica lo SBOM Docker al Punto 1 e clicca su 'Applica File Docker Caricato al Confronto' per vedere l'analisi.")
     
-    # ============================================================
-    # TAB DI VISUALIZZAZIONE GRAFICA DELLE DIPENDENZE
-    # ============================================================
-    st.markdown("---")
-    st.subheader("Analisi delle Dipendenze (Grafo & Albero)")
-
-    with st.container():
-        
-        # Unione dei grafi che arrivano da analisi diverse (Repo o Docker)
-        repo_graphs = st.session_state.get("deep_sbom_results", {}).get("graphs", {})
-        docker_graphs = st.session_state.get("docker_results", {}).get("graphs", {})
-        hierarchy_with_weights = st.session_state.get("docker_results", {}).get("hierarchy_with_weights", {})
-        
-        normalized_docker_graphs = {}
-        for purl, deps in docker_graphs.items():
-            # normalizzazone dei nodi e archi per il grafo Docker
-            normalized_docker_graphs["Docker_SBOM"] = {
-                "nodes": [{"id": purl, "label": purl.split('/')[-1].split('@')[0]} for purl in docker_graphs.keys()],
-                "edges": [{"source": parent, "target": child} for parent, children in docker_graphs.items() for child in children]
-            }
-        
-        # Unione dei due dizionari
-        all_graphs = {**repo_graphs, **normalized_docker_graphs}
-        
-        if all_graphs:
-            col_a, col_b = st.columns([2, 1])
-            with col_a:
-                file_selezionato = st.selectbox(
-                    "Seleziona lo SBOM da visualizzare:", 
-                    options=list(all_graphs.keys()),
-                    key="grafo_select"
-                )
-            with col_b:
-                modalita = st.radio("Layout:", ["Grafo Libero", "Albero Gerarchico"], horizontal=True)
-        
-            graph_data = all_graphs[file_selezionato]
-          
-         
-            # Creazione nodi e archi
-            nodes = [Node(id=n["id"], label=n["label"], size=15) for n in graph_data["nodes"]]
-            edges = [Edge(source=e["source"], target=e["target"]) for e in graph_data["edges"]]
-            
-            is_hierarchical = (modalita == "Albero Gerarchico") # Se l'utente sceglie la modalità ad albero, abilitiamo il layout gerarchico
-            
-            config = Config(
-                height=500, 
-                width="100%", 
-                directed=True, 
-                physics=not is_hierarchical, # Physics meno invasiva se è albero
-                hierarchical=is_hierarchical,
-                nodeHighlightBehavior=True,
-                highlightColor="#F7A7A6"
+        else:
+    
+            st.button(
+                label="🚫 SBOM Docker originale non disponibile",
+                disabled=True,
+                use_container_width=True
             )
-            
-            agraph(nodes=nodes, edges=edges, config=config)
+    
 
+    with st.expander(f"🟢 Pacchetti comuni tra Docker e Sorgente ({current_docker_report.get('packages_in_common_count', 0)})"):
+        if current_docker_report.get("in_common"):
             
-            if file_selezionato == "Docker_SBOM" and hierarchy_with_weights:
-                st.divider()
-                st.subheader("📊 Analisi Impatto Dipendenze")
-                
-                with st.expander("Analisi del peso delle dipendenze"):
-                    # Preparazione dati per la tabella
-                    impact_data = [
-                        {
-                            "Pacchetto": purl.split('/')[-1].split('@')[0], 
-                            "Peso (Dipendenze Totali)": data.get("weight", 0),
-                            "Dipendenze Sovrapposte": str(data.get("overlap", 0))
-                        } 
-                        for purl, data in hierarchy_with_weights.items()
-                    ]
-                    
-                    
-                    df = pd.DataFrame(impact_data)
-                    
-                    # Filtriamo solo i pacchetti con peso maggiore di 0 e ordiniamo per peso decrescente
-                    df_filtered = df[df["Peso (Dipendenze Totali)"] > 0].sort_values(
-                        by="Peso (Dipendenze Totali)", 
-                        ascending=False
-                        )
-                    
-                    # Conversione della colonna Pacchetto in una categoria ordinata così da mantenere l'ordine nel grafico a barre
-                    df_filtered["Pacchetto"] = pd.Categorical(
-                        df_filtered["Pacchetto"], 
-                        categories=df_filtered["Pacchetto"].unique(), 
-                        ordered=True
-                        )
-                    
-                    # visualizzazione a barre del peso delle dipendenze
-                    chart_data = df_filtered.set_index("Pacchetto")[["Peso (Dipendenze Totali)"]]
-                    
-                    # visualizzazione a barre colorata
-                    st.bar_chart(chart_data)
-                    
-                    # Tabella dettagliata
-                    st.dataframe(df_filtered, use_container_width=True)
-            
-                
-                    st.info("Il 'peso' indica quante dipendenze (dirette e indirette) ogni pacchetto trascina con sé. Le dipendenze sovrapposte rappresentano quelle condivise con altri pacchetti.")
-        
+            data = []
+            for item in current_docker_report["in_common"]:
+                sources = [f["source"] for f in item.get("source_files", [])]
+                data.append({
+                    "Componente": item["name"],
+                    "Versione": item["version"],
+                    "PURL": item.get("purl", "-"),
+                    "File Sorgente (oltre a immagine docker)": ", ".join(sources)
+                })
+            st.dataframe(pd.DataFrame(data), use_container_width=True)
         else:
-        
-            st.info("Esegui un'analisi (Repo o Docker) per generare i grafi.")
-        
-    # ============================================================
-    # TAB DI TRASPARENZA IN CODA (LOGS E FILE COMPLETI)
-    # ============================================================
-    st.markdown("---")
-    st.subheader("📋 Log di Controllo e File di Configurazione Generati")
+            st.info("Nessuna corrispondenza trovata.")
     
-    tab_labels = ["🔗 Link GitHub Sorgenti"]
+    
+    with st.expander(f"🔴 Pacchetti solo dentro l'Immagine Docker ({current_docker_report.get('packages_only_in_docker_count', 0)})"):
+        st. info("Questa sezione mostra i pacchetti presenti solo nell'immagine Docker. Si noti che alcune dipendenze possono essere presenti più volte con versioni diverse all'interno dello SBOM Docker. Questo perchè potrebbero esserci dei residui di build.")
+        
+        if current_docker_report.get("only_in_docker"):
+            data = []
+            for item in current_docker_report["only_in_docker"]:
+                data.append({
+                    "Componente": item["name"],
+                    "Versione": item["version"],
+                    "PURL": item.get("purl", "-")
+                })
+            st.dataframe(pd.DataFrame(data), use_container_width=True)
+        else:
+    
+            st.info("Nessun pacchetto extra rilevato.")
+    
+    with st.expander(f"⚠️ Pacchetti con Versioni Differenti ({len(current_docker_report.get('version_mismatches', []))})"):
+        mismatches = current_docker_report.get("version_mismatches", [])
+        if mismatches:
+            df_mismatch = pd.DataFrame([
+                {
+                    "Componente": m["docker"]["name"],
+                    "Versione Docker": m["docker"].get("version", "-"),
+                    "Versione Sorgente": m.get("code_version", "-"),
+                    "File Sorgente": ", ".join([f["source"] for f in m.get("source_files", [])])
+                } for m in mismatches
+            ])
+            st.dataframe(df_mismatch, use_container_width=True)
+        else:
+            st.info("Nessuna discrepanza di versione rilevata.")
+        
+    with st.expander(f"❌ Pacchetti Mancanti nel Docker SBOM ({len(current_docker_report.get('missing_in_docker', []))})"):
+        st. info("Questa sezione mostra le dipendenze che sono presenti nei sorgenti della repository ma non sono state rilevate nell'immagine Docker. Questo può indicare che alcune librerie non sono state incluse nella build dell'immagine.")
+        missing_in_docker = current_docker_report.get("missing_in_docker", [])
+        
+        if missing_in_docker:
+            # Creazione di un DataFrame per visualizzare le dipendenze mancanti in modo tabellare
+            df_missing = pd.DataFrame([
+                {
+                    "Componente": m.get("name", "-"),
+                    "Versione Sorgente": m.get("version", "-"),
+                    "PURL": m.get("purl", "-"),
+                    "File Sorgente (oltre a immagine docker)": ", ".join(m.get("files", []))
+                } for m in missing_in_docker
+            ])
+            st.dataframe(df_missing, use_container_width=True)
+    
+        else:
+            st.info("Nessuna dipendenza mancante rilevata nel Docker SBOM.")
+else:
+    
+    if docker_choice == "Genera SBOM Docker":
+    
+        st.info("💡 Clicca sul pulsante sopra per avviare la compilazione remota dell'immagine Docker e analizzarla.")
+    
+    else:
+    
+        st.info("💡 Carica lo SBOM Docker al Punto 1 e clicca su 'Applica File Docker Caricato al Confronto' per vedere l'analisi.")
 
-    tabs = st.tabs(tab_labels)
-    current_tab_idx = 0
+# ============================================================
+# TAB DI VISUALIZZAZIONE GRAFICA DELLE DIPENDENZE
+# ============================================================
+st.markdown("---")
+st.subheader("Analisi delle Dipendenze (Grafo & Albero)")
+
+with st.container():
     
-    with tabs[current_tab_idx]:
+    # Unione dei grafi che arrivano da analisi diverse (Repo o Docker)
+    #repo_graphs = st.session_state.get("deep_sbom_results", {}).get("graphs", {})
+    docker_graphs = st.session_state.get("docker_results", {}).get("graphs", {})
+    hierarchy_with_weights = st.session_state.get("docker_results", {}).get("hierarchy_with_weights", {})
+    
+    normalized_docker_graphs = {}
+    for purl, deps in docker_graphs.items():
+        # normalizzazone dei nodi e archi per il grafo Docker
+        normalized_docker_graphs["Docker_SBOM"] = {
+            "nodes": [{"id": purl, "label": purl.split('/')[-1].split('@')[0]} for purl in docker_graphs.keys()],
+            "edges": [{"source": parent, "target": child} for parent, children in docker_graphs.items() for child in children]
+        }
+    
+    # Unione dei due dizionari
+    #all_graphs = {**repo_graphs, **normalized_docker_graphs}
+    all_graphs = normalized_docker_graphs  # Al momento consideriamo solo il grafo Docker per la visualizzazione
+    if all_graphs:
+        col_a, col_b = st.columns([2, 1])
+        with col_a:
+            file_selezionato = st.selectbox(
+                "Seleziona lo SBOM da visualizzare:", 
+                options=list(all_graphs.keys()),
+                key="grafo_select"
+            )
+        with col_b:
+            modalita = st.radio("Layout:", ["Grafo Libero", "Albero Gerarchico"], horizontal=True)
+    
+        graph_data = all_graphs[file_selezionato]
         
-        if git_repos:
         
-            for r in sorted(list(set(git_repos))): 
-                # Se la URL è valida -> cliccabile; altrimenti, visualizzala come testo normale
-                st.markdown(f"- [{r}]({r})" if r.startswith("http") else f"- {r}")
+        # Creazione nodi e archi
+        nodes = [Node(id=n["id"], label=n["label"], size=15) for n in graph_data["nodes"]]
+        edges = [Edge(source=e["source"], target=e["target"]) for e in graph_data["edges"]]
         
-        else: st.info("Nessuna repository GitHub mappata.")
-    current_tab_idx += 1
+        is_hierarchical = (modalita == "Albero Gerarchico") # Se l'utente sceglie la modalità ad albero, abilitiamo il layout gerarchico
+        
+        config = Config(
+            height=500, 
+            width="100%", 
+            directed=True, 
+            physics=not is_hierarchical, # Physics meno invasiva se è albero
+            hierarchical=is_hierarchical,
+            nodeHighlightBehavior=True,
+            highlightColor="#F7A7A6"
+        )
+        
+        agraph(nodes=nodes, edges=edges, config=config)
+
+        
+        if file_selezionato == "Docker_SBOM" and hierarchy_with_weights:
+            st.divider()
+            st.subheader("📊 Analisi Impatto Dipendenze")
+            
+            with st.expander("Analisi del peso delle dipendenze"):
+                # Preparazione dati per la tabella
+                impact_data = [
+                    {
+                        "Pacchetto": purl.split('/')[-1].split('@')[0], 
+                        "Peso (Dipendenze Totali)": data.get("weight", 0),
+                        "Dipendenze Sovrapposte": str(data.get("overlap", 0))
+                    } 
+                    for purl, data in hierarchy_with_weights.items()
+                ]
+                
+                
+                df = pd.DataFrame(impact_data)
+                
+                # Filtriamo solo i pacchetti con peso maggiore di 0 e ordiniamo per peso decrescente
+                df_filtered = df[df["Peso (Dipendenze Totali)"] > 0].sort_values(
+                    by="Peso (Dipendenze Totali)", 
+                    ascending=False
+                    )
+                
+                # Conversione della colonna Pacchetto in una categoria ordinata così da mantenere l'ordine nel grafico a barre
+                df_filtered["Pacchetto"] = pd.Categorical(
+                    df_filtered["Pacchetto"], 
+                    categories=df_filtered["Pacchetto"].unique(), 
+                    ordered=True
+                    )
+                
+                # visualizzazione a barre del peso delle dipendenze
+                chart_data = df_filtered.set_index("Pacchetto")[["Peso (Dipendenze Totali)"]]
+                
+                # visualizzazione a barre colorata
+                st.bar_chart(chart_data)
+                
+                # Tabella dettagliata
+                st.dataframe(df_filtered, use_container_width=True)
+        
+            
+                st.info("Il 'peso' indica quante dipendenze (dirette e indirette) ogni pacchetto trascina con sé. Le dipendenze sovrapposte rappresentano quelle condivise con altri pacchetti.")
+    
+    else:
+    
+        st.info("Esegui un'analisi (Repo o Docker) per generare i grafi.")
+    
+# ============================================================
+# TAB DI TRASPARENZA IN CODA (LOGS E FILE COMPLETI)
+# ============================================================
+st.markdown("---")
+st.subheader("📋 Log di Controllo e File di Configurazione Generati")
+
+tab_labels = ["🔗 Link GitHub Sorgenti"]
+
+tabs = st.tabs(tab_labels)
+current_tab_idx = 0
+
+with tabs[current_tab_idx]:
+    
+    if git_repos:
+    
+        for r in sorted(list(set(git_repos))): 
+            # Se la URL è valida -> cliccabile; altrimenti, visualizzala come testo normale
+            st.markdown(f"- [{r}]({r})" if r.startswith("http") else f"- {r}")
+    
+    else: st.info("Nessuna repository GitHub mappata.")
+current_tab_idx += 1

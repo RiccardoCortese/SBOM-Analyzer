@@ -417,6 +417,18 @@ def remove_readonly(func, path, excinfo):
     os.chmod(path, stat.S_IWRITE)
     func(path)
 
+# ===========================================================
+#  Funzione per il parsign del dockerfile
+# ===========================================================
+
+def parse_dockerfile_content(content: str):
+    return {
+        "uses_poetry": "poetry" in content,
+        "uses_uv": "uv" in content,
+        "uses_pip": "pip" in content and "poetry" not in content,
+        "base_image": [line.split()[1] for line in content.splitlines() if line.lower().startswith("from ")],
+        "is_multistage": content.lower().count("from ") > 1
+    }
 # ============================================================
 # ACQUISIZIONE E SALVATAGGIO IN MEMORIA SERVER di file JSON manuali o generati
 # ============================================================
@@ -439,35 +451,46 @@ async def upload_sbom(
     # Se il mode è "docker", eseguiamo il discovery automatico dei file di dipendenze dal Dockerfile
     if mode == "docker":
         if not repo_url:
-            raise HTTPException(400, "URL repository mancante per il discovery.")
+            raise HTTPException(400, "URL repository mancante.")
             
         tmp_clone = tempfile.mkdtemp()
         try:
-            subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, repo_url, tmp_clone], check=True)
-            
-            # Parsing dei file
+            try:
+                subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, repo_url, tmp_clone], check=True)
+            except subprocess.CalledProcessError:
+                subprocess.run(["git", "clone", "--depth", "1", repo_url, tmp_clone], check=True)
+                
             found_files = []
-            valid_patterns = ["requirements.txt", "pyproject.toml", "poetry.lock", "dependencies.json", "package.json"]
+            docker_analysis = None
+            valid_patterns = ["requirements.txt", "pyproject.toml", "poetry.lock", "uv.lock"]
             
             for root, _, files in os.walk(tmp_clone):
                 for f in files:
+                    if f == "Dockerfile":
+                        with open(os.path.join(root, f), 'r') as df:
+                            docker_analysis = parse_dockerfile_content(df.read())
+                    
                     if f in valid_patterns:
-                        file_path = os.path.join(root, f)
-                        dest_path = os.path.join(STORAGE_DIR, f)
-                        shutil.copy(file_path, dest_path)
-                        found_files.append(f)
+                        rel_path = os.path.relpath(root, tmp_clone).replace(os.sep, "_")
+                        dest_name = f"{rel_path}_{f}" if rel_path != "." else f
+                        shutil.copy(os.path.join(root, f), os.path.join(STORAGE_DIR, dest_name))
+                        found_files.append(dest_name)
             
             if not found_files:
                 raise HTTPException(400, "Nessun file di dipendenze rilevato.")
-            
+                
             with open(os.path.join(STORAGE_DIR, "discovered_files.json"), "w") as f:
                 json.dump(found_files, f)
-            
-            return {"status": "success", "files": found_files}
+                
+            return {
+                "status": "success", 
+                "files": found_files, 
+                "docker_insights": docker_analysis
+            }
             
         finally:
             shutil.rmtree(tmp_clone, onerror=remove_readonly)
-            
+                
     # Se l'azione è "upload", salviamo tutti i file manuali caricati (requirements, poetry, docker) per l'analisi comparativa
     if action == "upload":
         if not requirements_file and not poetry_file and not docker_file:
