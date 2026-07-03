@@ -125,7 +125,7 @@ jobs:
         if [ -n "$LOCK_FILE" ]; then
           echo "File di lock trovato: $LOCK_FILE"
           # Trivy analizza il lockfile per generare un SBOM accurato
-          trivy fs --format cyclonedx --output ${{ env.OUTPUT_DIR }}/trivy_python_deps.json "$LOCK_FILE"
+          trivy fs --format cyclonedx --output ${{ env.OUTPUT_DIR }}/trivy_uv.json "$LOCK_FILE"
         else
           echo "Nessun file di lock (uv.lock/poetry.lock) trovato."
         fi
