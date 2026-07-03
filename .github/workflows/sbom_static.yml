@@ -11,7 +11,7 @@ on:
         required: false
         default: 'main'
       format:
-        description: 'Format (requirements, poetry, entrambi)'
+        description: 'Format (requirements, poetry, uv, entrambi)'
         required: false
         default: 'entrambi'
   repository_dispatch:
@@ -73,7 +73,7 @@ jobs:
         curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
 
     # ============================================================
-    # ESECUZIONE POETRY (SOLO TRIVY)
+    # ESECUZIONE POETRY 
     # ============================================================
     - name: Process Poetry SBOMs
       if: ${{ env.FORMAT_TYPE == 'poetry' || env.FORMAT_TYPE == 'entrambi' }}
@@ -97,7 +97,7 @@ jobs:
         fi
 
     # ============================================================
-    #  ESECUZIONE REQUIREMENTS (SOLO TRIVY)
+    #  ESECUZIONE REQUIREMENTS 
     # ============================================================
     - name: Process Requirements SBOMs
       if: ${{ env.FORMAT_TYPE == 'requirements' || env.FORMAT_TYPE == 'entrambi' }}
@@ -110,7 +110,25 @@ jobs:
         else
           echo "Skipping Requirements: requirements.txt non trovato."
         fi
-
+    
+    # ============================================================
+    # ESECUZIONE UV
+    # ============================================================
+    - name: Process Python Lockfiles (UV)
+      if: ${{ env.FORMAT_TYPE == 'uv' || env.FORMAT_TYPE == 'entrambi' }}
+      run: |
+        mkdir -p ${{ env.OUTPUT_DIR }}
+        
+        # Cerchiamo file di lock uv.lock
+        LOCK_FILE=$(find "$(pwd)/repo_esterna" -name "uv.lock" | head -n 1)
+        
+        if [ -n "$LOCK_FILE" ]; then
+          echo "File di lock trovato: $LOCK_FILE"
+          # Trivy analizza il lockfile per generare un SBOM accurato
+          trivy fs --format cyclonedx --output ${{ env.OUTPUT_DIR }}/trivy_python_deps.json "$LOCK_FILE"
+        else
+          echo "Nessun file di lock (uv.lock/poetry.lock) trovato."
+        fi
     # ============================================================
     # CARICAMENTO RISULTATI COMPLETI
     # ============================================================

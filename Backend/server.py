@@ -554,12 +554,14 @@ async def analyze_standard_file(
     if format == "Entrambi":
         files_da_analizzare = ["requirements", "poetry"] # Aggiungi quelli che vuoi
     else:
-        if format not in ["requirements", "poetry", "pyproject.toml", "poetry.lock", "requirements.txt"]:
+        if format not in ["requirements", "poetry", "pyproject.toml", "poetry.lock", "requirements.txt", "uv.lock"]:
             raise HTTPException(status_code=400, detail="Formato non supportato per l'analisi standard.")
         elif format == "requirements.txt":
             files_da_analizzare = ["requirements"]
         elif format == "pyproject.toml" or format == "poetry.lock":
             files_da_analizzare = ["poetry"]
+        elif format == "uv.lock":
+            files_da_analizzare = ["uv"]
 
     results = []
     
