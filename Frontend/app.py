@@ -133,7 +133,7 @@ if st.button("🔄 Invia e Avvia Discovery"):
                 
                 if "files" in risposta:
                     st.session_state.found_files = risposta.get("files", [])
-                    st.session_state.docker_insights = risposta.get("docker_insights", {})
+                    st.session_state.install_commands = risposta.get("install_commands", [])
                     st.info(f"Ho trovato {len(st.session_state.found_files)} file di dipendenze.")
                 st.rerun()
             else:
@@ -146,27 +146,19 @@ if st.button("🔄 Invia e Avvia Discovery"):
             
 if "found_files" in st.session_state and st.session_state.found_files:
     # Recuperiamo le analisi dal session_state (se le hai salvate lì dal backend)
-    insights = st.session_state.get("docker_insights", {})
     
     st.subheader("📦 File di dipendenze rilevati")
     
     # Visualizzazione dinamica
     for file_name in st.session_state.found_files:
-        # Se il file è collegato a un insight, aggiungiamo una nota
-        badge = ""
-        if file_name == "pyproject.toml" and insights.get("uses_poetry"):
-            badge = "🔥 (Poetry Rilevato)"
-        elif file_name == "requirements.txt" and insights.get("uses_pip"):
-            badge = "🐍 (Standard Pip)"
-            
-        st.markdown(f"📄 **{file_name}** {badge}")
-
-    # Visualizzazione delle intuizioni Docker (Insight)
-    if insights:
-        with st.expander("🔍 Dockerfile Insights"):
-            st.write(f"**Base Image:** {', '.join(insights.get('base_image', []))}")
-            st.write(f"**Multi-stage build:** {'Sì' if insights.get('is_multistage') else 'No'}")
-            st.write(f"**Package Manager:** {'UV' if insights.get('uses_uv') else 'Pip/Poetry'}")
+        st.markdown(f"📄 **{file_name}**")
+    
+    if "install_commands" in st.session_state and st.session_state.install_commands:
+        st.subheader("Comandi di installazione rilevati")
+        for cmd in st.session_state.install_commands:
+            st.code(cmd, language="bash")
+    else:
+        st.info("Nessun comando di installazione rilevato.")
 
     st.markdown("---")
     

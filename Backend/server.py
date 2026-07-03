@@ -11,6 +11,7 @@ import time
 import zipfile
 from typing import Optional
 import stat
+from dockerfile_parse import DockerfileParser
 
 # ============================================================
 # CONFIGURAZIONE INIZIALE E VARIABILI GLOBALI
@@ -357,7 +358,7 @@ def wait_and_download_artifacts(run_id: int, dest_dir: str):
                 file_path = os.path.join(dest_dir, file_name)
                 
                 # Smista in base al nome
-                if "requirements" in file_name or "poetry" in file_name:
+                if "requirements" in file_name or "poetry" in file_name or "uv" in file_name:
                     shutil.move(file_path, os.path.join(manifests_dir, file_name))
                 elif file_name != "docker_sbom.json" and file_name != "cyclonedx-license-SBOM.json" and file_name != "cyclonedx-vuln-SBOM.json":
                     shutil.move(file_path, os.path.join(deps_dir, file_name))
@@ -429,6 +430,41 @@ def parse_dockerfile_content(content: str):
         "base_image": [line.split()[1] for line in content.splitlines() if line.lower().startswith("from ")],
         "is_multistage": content.lower().count("from ") > 1
     }
+    
+
+
+def get_all_installs(dockerfile_content):
+    parser = DockerfileParser()
+    parser.content = dockerfile_content
+    
+    run_commands = []
+    current_cmd = ""
+    
+    # parser.lines contiene le istruzioni già pulite dalla libreria
+    for line in parser.lines:
+        line_stripped = line.strip()
+        
+        # Se la riga inizia con RUN, inizia un nuovo comando
+        if line_stripped.lower().startswith("run "):
+            current_cmd = line_stripped.strip()
+            
+            # Se il comando corrente è completo (non finisce con \), lo aggiungiamo subito
+            if not current_cmd.endswith('\\'):
+                run_commands.append(current_cmd)
+                current_cmd = ""
+        
+        # Se siamo in un comando multi-riga (accumulato in current_cmd)
+        elif current_cmd:
+            clean_line = line_stripped.rstrip('\\').strip()
+            current_cmd += " " + clean_line
+            
+            # Se la riga NON finisce con \, il comando è finito
+            if not line_stripped.endswith('\\'):
+                run_commands.append(current_cmd)
+                current_cmd = ""
+    
+    # Filtriamo solo i comandi che contengono installazioni
+    return run_commands
 # ============================================================
 # ACQUISIZIONE E SALVATAGGIO IN MEMORIA SERVER di file JSON manuali o generati
 # ============================================================
@@ -467,8 +503,10 @@ async def upload_sbom(
             for root, _, files in os.walk(tmp_clone):
                 for f in files:
                     if f == "Dockerfile":
-                        with open(os.path.join(root, f), 'r') as df:
-                            docker_analysis = parse_dockerfile_content(df.read())
+                        file_path = os.path.join(root, f)
+                        with open(file_path, 'r') as df:
+                            docker_content = df.read()
+                            docker_analysis = parse_dockerfile_content(docker_content)
                     
                     if f in valid_patterns:
                         rel_path = os.path.relpath(root, tmp_clone).replace(os.sep, "_")
@@ -481,11 +519,13 @@ async def upload_sbom(
                 
             with open(os.path.join(STORAGE_DIR, "discovered_files.json"), "w") as f:
                 json.dump(found_files, f)
-                
+            
+            install_commands = get_all_installs(docker_content) if docker_content else []
+
             return {
                 "status": "success", 
                 "files": found_files, 
-                "docker_insights": docker_analysis
+                "install_commands": install_commands
             }
             
         finally:
@@ -552,9 +592,10 @@ async def analyze_standard_file(
     # Logica per gestire "Entrambi"
     files_da_analizzare = []
     if format == "Entrambi":
-        files_da_analizzare = ["requirements", "poetry"] # Aggiungi quelli che vuoi
+        files_da_analizzare = ["uv", "poetry"] # Aggiungi quelli che vuoi
     else:
         if format not in ["requirements", "poetry", "pyproject.toml", "poetry.lock", "requirements.txt", "uv.lock"]:
+            print("A")
             raise HTTPException(status_code=400, detail="Formato non supportato per l'analisi standard.")
         elif format == "requirements.txt":
             files_da_analizzare = ["requirements"]
@@ -582,6 +623,7 @@ async def analyze_standard_file(
 # ============================================================
 
 def run_standard_sbom_action(repo_url, branch, format):
+    print(f"[DEBUG] Avvio analisi per {format} su {repo_url} (branch: {branch})", flush=True)
     
     match = re.search(r"github\.com/([^/]+)/([^/?#]+)", repo_url)
     owner_repo = f"{match.group(1)}/{match.group(2).replace('.git', '')}" if match else repo_url
@@ -604,10 +646,12 @@ def run_standard_sbom_action(repo_url, branch, format):
     mapping = {
         "requirements": "trivy_requirements.json",
         "poetry": "trivy_poetry.json",
-        "pyproject": "trivy_pyproject.json"
+        "pyproject": "trivy_pyproject.json",
+        "uv": "trivy_uv.json"
     }
 
     if format not in mapping:
+        print("B")
         raise HTTPException(status_code=400, detail="File di dipendenze non supportato")
         
     target_file = os.path.join(STORAGE_DIR, "manifests", mapping[format])
