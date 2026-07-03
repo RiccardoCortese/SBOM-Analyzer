@@ -79,8 +79,8 @@ elif docker_choice == "Genera SBOM Docker":
          
     docker_image_tag = st.text_input(
         "Tag Immagine / Nome Dockerfile custom:",
-        value="stfbk/tlsassistant:v3.2-dev3",
-        placeholder="es. stfbk/tlsassistant:v3.2-dev2-ACN o ./docker/Dockerfile"
+        value="paperlessngx/paperless-ngx:dev",
+        placeholder="es. myrepo/myimage:latest"
     )
     
     # Tipo di vulnerabilità da scansionare con Trivy
