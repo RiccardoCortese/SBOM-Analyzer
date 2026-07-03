@@ -11,6 +11,7 @@ import time
 import zipfile
 from typing import Optional
 import stat
+from dockerfile_parse import DockerfileParser
 
 # ============================================================
 # CONFIGURAZIONE INIZIALE E VARIABILI GLOBALI
@@ -417,6 +418,54 @@ def remove_readonly(func, path, excinfo):
     os.chmod(path, stat.S_IWRITE)
     func(path)
 
+# ===========================================================
+#  Funzione per il parsign del dockerfile
+# ===========================================================
+
+def parse_dockerfile_content(content: str):
+    return {
+        "uses_poetry": "poetry" in content,
+        "uses_uv": "uv" in content,
+        "uses_pip": "pip" in content and "poetry" not in content,
+        "base_image": [line.split()[1] for line in content.splitlines() if line.lower().startswith("from ")],
+        "is_multistage": content.lower().count("from ") > 1
+    }
+    
+
+
+def get_all_installs(dockerfile_content):
+    parser = DockerfileParser()
+    parser.content = dockerfile_content
+    
+    run_commands = []
+    current_cmd = ""
+    
+    # parser.lines contiene le istruzioni già pulite dalla libreria
+    for line in parser.lines:
+        line_stripped = line.strip()
+        
+        # Se la riga inizia con RUN, inizia un nuovo comando
+        if line_stripped.lower().startswith("run "):
+            current_cmd = line_stripped.strip()
+            
+            # Se il comando corrente è completo (non finisce con \), lo aggiungiamo subito
+            if not current_cmd.endswith('\\'):
+                run_commands.append(current_cmd)
+                current_cmd = ""
+        
+        # Se siamo in un comando multi-riga (accumulato in current_cmd)
+        elif current_cmd:
+            clean_line = line_stripped.rstrip('\\').strip()
+            current_cmd += " " + clean_line
+            
+            # Se la riga NON finisce con \, il comando è finito
+            if not line_stripped.endswith('\\'):
+                run_commands.append(current_cmd)
+                current_cmd = ""
+    
+    # Filtriamo solo i comandi che contengono installazioni
+    return run_commands
+
 # ============================================================
 # ACQUISIZIONE E SALVATAGGIO IN MEMORIA SERVER di file JSON manuali o generati
 # ============================================================
@@ -439,34 +488,50 @@ async def upload_sbom(
     # Se il mode è "docker", eseguiamo il discovery automatico dei file di dipendenze dal Dockerfile
     if mode == "docker":
         if not repo_url:
-            raise HTTPException(400, "URL repository mancante per il discovery.")
+            raise HTTPException(400, "URL repository mancante.")
             
         tmp_clone = tempfile.mkdtemp()
         try:
-            subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, repo_url, tmp_clone], check=True)
-            
-            # Parsing dei file
+            try:
+                subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, repo_url, tmp_clone], check=True)
+            except subprocess.CalledProcessError:
+                subprocess.run(["git", "clone", "--depth", "1", repo_url, tmp_clone], check=True)
+                
             found_files = []
-            valid_patterns = ["requirements.txt", "pyproject.toml", "poetry.lock", "dependencies.json", "package.json"]
+            docker_analysis = None
+            valid_patterns = ["requirements.txt", "pyproject.toml", "poetry.lock", "uv.lock", "dependencies.json"]
             
             for root, _, files in os.walk(tmp_clone):
                 for f in files:
-                    if f in valid_patterns:
+                    if f == "Dockerfile":
                         file_path = os.path.join(root, f)
-                        dest_path = os.path.join(STORAGE_DIR, f)
-                        shutil.copy(file_path, dest_path)
-                        found_files.append(f)
+                        with open(file_path, 'r') as df:
+                            docker_content = df.read()
+                            docker_analysis = parse_dockerfile_content(docker_content)
+                    
+                    if f in valid_patterns:
+                        rel_path = os.path.relpath(root, tmp_clone).replace(os.sep, "_")
+                        dest_name = f"{rel_path}_{f}" if rel_path != "." else f
+                        shutil.copy(os.path.join(root, f), os.path.join(STORAGE_DIR, dest_name))
+                        found_files.append(dest_name)
             
             if not found_files:
                 raise HTTPException(400, "Nessun file di dipendenze rilevato.")
-            
+                
             with open(os.path.join(STORAGE_DIR, "discovered_files.json"), "w") as f:
                 json.dump(found_files, f)
             
-            return {"status": "success", "files": found_files}
+            install_commands = get_all_installs(docker_content) if docker_content else []
+
+            return {
+                "status": "success", 
+                "files": found_files, 
+                "install_commands": install_commands
+            }
             
         finally:
             shutil.rmtree(tmp_clone, onerror=remove_readonly)
+
             
     # Se l'azione è "upload", salviamo tutti i file manuali caricati (requirements, poetry, docker) per l'analisi comparativa
     if action == "upload":

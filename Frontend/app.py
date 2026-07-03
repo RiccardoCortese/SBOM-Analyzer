@@ -132,7 +132,8 @@ if st.button("🔄 Invia e Avvia Discovery"):
                 st.success(f"Configurazione accettata: {risposta.get('message')}")
                 
                 if "files" in risposta:
-                    st.session_state.found_files = risposta["files"]
+                    st.session_state.found_files = risposta.get("files", [])
+                    st.session_state.install_commands = risposta.get("install_commands", [])
                     st.info(f"Ho trovato {len(st.session_state.found_files)} file di dipendenze.")
                 st.rerun()
             else:
@@ -144,25 +145,31 @@ if st.button("🔄 Invia e Avvia Discovery"):
             st.error(f"Errore di connessione: {str(e)}")
             
 if "found_files" in st.session_state and st.session_state.found_files:
-    # DEFINIAMO CHI SONO I FILE "STANDARD"
-    standard_files = ["requirements.txt", "poetry.lock", "pyproject.toml"]
-    
-    # FILTRIAMO LE LISTE
-    standard_found = [f for f in st.session_state.found_files if f in standard_files]
-    custom_found = [f for f in st.session_state.found_files if f not in standard_files]
+    # Recuperiamo le analisi dal session_state (se le hai salvate lì dal backend)
     
     st.subheader("📦 File di dipendenze rilevati")
     
+    # Visualizzazione dinamica
     for file_name in st.session_state.found_files:
         st.markdown(f"📄 **{file_name}**")
+    
+    if "install_commands" in st.session_state and st.session_state.install_commands:
+        st.subheader("Comandi di installazione rilevati")
+        for cmd in st.session_state.install_commands:
+            st.code(cmd, language="bash")
+    else:
+        st.info("Nessun comando di installazione rilevato.")
 
     st.markdown("---")
+    
     
     # ===========================================================
     # SEZIONE DI ANALISI DEI FILE STANDARD (requirements.txt, poetry.lock, pyproject.toml)
     # ===========================================================
     
     st.subheader("📋 File \"standard\" di dipendenze rilevati")
+    
+    standard_found = [f for f in st.session_state.found_files if f.lower() in ["requirements.txt", "poetry.lock", "pyproject.toml"]]
     
     format_type = st.selectbox(
         "Seleziona il formato da cui generare SBOM tramite la pipeline:",
@@ -235,7 +242,7 @@ if "found_files" in st.session_state and st.session_state.found_files:
     # ============================================================
     
     st.subheader("📋 File custom di dipendenze rilevati")
-    
+    custom_found = [f for f in st.session_state.found_files if f.lower() not in ["requirements.txt", "poetry.lock", "pyproject.toml"]]
     custom_file = st.selectbox(
         "Seleziona il fileda analizzare:",
         options=custom_found,
