@@ -119,12 +119,10 @@ jobs:
       run: |
         mkdir -p ${{ env.OUTPUT_DIR }}
         
-        # Cerchiamo file di lock uv.lock
         LOCK_FILE=$(find "$(pwd)/repo_esterna" -name "uv.lock" | head -n 1)
         
         if [ -n "$LOCK_FILE" ]; then
           echo "File di lock trovato: $LOCK_FILE"
-          # Trivy analizza il lockfile per generare un SBOM accurato
           trivy fs --format cyclonedx --output ${{ env.OUTPUT_DIR }}/trivy_uv.json "$LOCK_FILE"
         else
           echo "Nessun file di lock (uv.lock/poetry.lock) trovato."
