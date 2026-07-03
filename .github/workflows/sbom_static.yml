@@ -31,26 +31,45 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout Your Repository (Scripts)
-      uses: actions/checkout@v4
-      with:
-        path: mio_progetto
-        
+
     - name: Checkout Target Repository
       uses: actions/checkout@v4
       with:
         repository: ${{ env.SRC_REPO }}
         ref: ${{ env.SRC_BRANCH }}
         path: repo_esterna
+        
+    - name: Detect Required Python Version
+      id: detect-python
+      run: |
+        VERSION="3.12" # Default di fallback
+        
+        # Cerca pyproject.toml
+        TOML_PATH=$(find "$(pwd)/repo_esterna" -name "pyproject.toml" | head -n 1)
+        if [ -f "$TOML_PATH" ]; then
+          # Estrae la prima occorrenza di X.Y che segue requires-python
+          VERSION=$(grep "requires-python" "$TOML_PATH" | grep -oE "[0-9]+\.[0-9]+" | head -n 1)
+          echo "Versione rilevata da TOML: $VERSION"
+        
+        # Se non c'è TOML, cerca runtime.txt (spesso presente in repo che usano requirements.txt)
+        elif [ -f "$(pwd)/repo_esterna/runtime.txt" ]; then
+          VERSION=$(grep -oE "[0-9]+\.[0-9]+" "$(pwd)/repo_esterna/runtime.txt" | head -n 1)
+          echo "Versione rilevata da runtime.txt: $VERSION"
+        
+        else
+          echo "Nessuna versione specifica trovata, uso default 3.12"
+        fi
+        
+        echo "python_ver=$VERSION" >> $GITHUB_OUTPUT
 
     - name: Setup Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.10'
+        python-version: ${{ steps.detect-python.outputs.python_ver }}
 
     - name: Install tools
       run: |
-        pip install poetry
+        pip install uv 
         curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
 
     # ============================================================
@@ -63,14 +82,16 @@ jobs:
         TOML_PATH=$(find "$(pwd)/repo_esterna" -name "pyproject.toml" | head -n 1)
         if [ -n "$TOML_PATH" ]; then
           DIR_PATH=$(dirname "$TOML_PATH")
+          
+          # Tentativo robusto di lock
           cd "$DIR_PATH"
-          poetry config virtualenvs.create false
-          poetry lock
+          # Usiamo uv per risolvere le dipendenze invece di poetry, 
+          # è molto più tollerante con le versioni Python
+          uv lock || echo "Il lock automatico è fallito, procedo con il file esistente..."
           cd -
           
-          # Generazione SBOM con Trivy
-          trivy fs --format cyclonedx --output ${{ env.OUTPUT_DIR }}/trivy_poetry.json $DIR_PATH/poetry.lock
-          
+          trivy fs --format cyclonedx --output ${{ env.OUTPUT_DIR }}/trivy_poetry.json "$DIR_PATH"
+        
         else
           echo "Skipping Poetry: pyproject.toml non trovato."
         fi
