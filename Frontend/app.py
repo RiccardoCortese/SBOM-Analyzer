@@ -245,38 +245,68 @@ if "found_files" in st.session_state and st.session_state.found_files:
     # SEZIONE DI ANALISI DEI FILE CUSTOM (qualsiasi altro file di dipendenze)
     # ============================================================
     
-    st.subheader("📋 File custom di dipendenze rilevati")
+    st.subheader("Immagini docker rilevate nel dockerfile")
     
-    custom_file = st.selectbox(
-        "Seleziona il fileda analizzare:",
-        options=st.session_state.found_files,
-        format_func=lambda x: x.capitalize()
-    )
+    for i, image in enumerate(st.session_state.images):
+        
+        def extract_image(from_line: str):
+            # rimuove "FROM"
+            line = from_line.strip()
+            line = re.sub(r"^FROM\s+", "", line, flags=re.IGNORECASE)
+
+            # rimuove flags tipo --platform=...
+            line = re.sub(r"--\S+\s+", "", line)
+
+            # rimuove AS stage
+            line = re.split(r"\s+AS\s+", line, flags=re.IGNORECASE)[0]
+
+            return line.strip()
+
+        clear_image = extract_image(image)
+        
+        docker_image_tag_custom = st.text_input(
+            "Tag Immagine / Nome Dockerfile custom:",
+            value= clear_image,
+            key=f"docker_image_tag_custom_{i}"
+        )
+        
+        # Tipo di vulnerabilità da scansionare con Trivy
+        vuln_type_custom = st.selectbox(
+            "Seleziona cosa scansionare nell'immagine Docker:",
+            
+            options=["os,library", "os", "library"],
+            
+            format_func=lambda x: {
+                "os,library": "Tutto (Sia OS che Librerie di linguaggio)",
+                "os": "Solo pacchetti del Sistema Operativo",
+                "library": "Solo librerie dell'applicazione"
+            }[x],
+            
+            index=0,  # Default su tutto
+            key=f"vuln_type_custom_{i}"
+        )
     
-    btn_col1, btn_col2 = st.columns(2)
     
-    # ============================================================
-    # BOTTONE PER AVVIARE L'ANALISI DEL FILE CUSTOM SELEZIONATO
-    # ============================================================
-    
-    with btn_col1:
-    
-        if st.button("Avvia analisi file custom", use_container_width=True):
+        # ============================================================
+        # BOTTONE PER AVVIARE L'ANALISI DEL FILE CUSTOM SELEZIONATO
+        # ============================================================
+        
+        
+        if st.button("Avvia analisi file custom", use_container_width=True, key=f"analyze_custom_{i}"):
             
             with st.spinner("Invio richiesta al backend per generare SBOM standard..."):
                 try:
                     res = requests.post(
                         f"{BACKEND_URL}/analyze-custom-file",
                         data={
-                            "repo_url": st.session_state.saved_repo,
-                            "branch": st.session_state.saved_branch,
-                            "path_file": custom_file
+                            "docker_image_tag_custom": docker_image_tag_custom,
+                            "vuln_type_custom": vuln_type_custom
                         }
                     )
                     
                     if res.status_code == 200:
                         st.session_state.analysis_results = res.json()
-                        st.success("Tabella di confronto generata!")
+                        st.success("Analisi immagine docker custom completata!")
                         st.rerun()
                         
                     else:
@@ -284,136 +314,49 @@ if "found_files" in st.session_state and st.session_state.found_files:
                         st.error(f"Analisi SBOM custom Fallita: {error_msg}")
                 except Exception as e:
                     st.error(f"Errore di connessione: {str(e)}")
-        # ============================================================
-        # BOTTONE PER FAR PARTIRE ANALISI DEEP DEL FILE CUSTOM SELEZIONATO (con generazione di grafi e SBOM)
-        # ============================================================
-        
-        with btn_col2:
-            if st.session_state.analysis_results is not None:
-                if st.button("Avvia analisi approfondita (Deep)", use_container_width=True):
                     
-                    with st.spinner("Invio richiesta al backend per generare SBOM approfondito..."):
-                        try:
-                            res = requests.post(
-                                f"{BACKEND_URL}/analyze-dependencies-sbom",
-                                data={
-                                    "repo_url": st.session_state.saved_repo,
-                                    "branch": st.session_state.saved_branch,
-                                    "path_file": custom_file
-                                }
-                            )
-                            
-                            if res.status_code == 200:
-                                st.session_state.deep_sbom_results = res.json()
-                                st.success("Analisi approfondita completata!")
-                                st.rerun()
-                                
-                            else:
-                                error_msg = res.json().get("detail", "Errore sconosciuto")
-                                st.error(f"Analisi approfondita Fallita: {error_msg}")
-                        except Exception as e:
-                            st.error(f"Errore di connessione: {str(e)}")
-        
-    
-    st.markdown("---")
+        if st.session_state.analysis_results is not None:
+            item = st.session_state.analysis_results["data"]
 
+            st.subheader(f"📦 Risultato per {item["filename"]}")
 
+            with st.container(height=300, key=f"custom_result_{i}"):
+                st.json(item["content"])
 
-# DIPENDENZE DEL FILE CUSTOM ANALIZZATO (se esiste un risultato)
-if st.session_state.analysis_results is not None:
-    
-    result = st.session_state.analysis_results
-    dependencies = result.get("result", [])
-    git_repos = [item["url"] for item in dependencies if item.get("url") and "github.com" in item["url"]]
-    component_type = result.get("component_type", None)
-    
-    # ============================================================
-    # TABELLONE DINAMICO DI CONFRONTO (con possibilità di download dei singoli SBOM riga per riga)
-    # ============================================================    
-    st.markdown("### 📦 Elenco Dipendenze Rilevate nel File Custom")
-    with st.container(height=1000):
-        if dependencies:
-            
-            all_columns = {
-                "type": "Tipo",
-                "name": "Componente",
-                "component_type": "Tipo Componente",
-                "url": "Sorgente / PURL",
-                "present_in_requirements": "In Requirements",
-                "present_in_poetry": "In Poetry"
-            }
+            col_btn1, col_btn2 = st.columns([1, 1])
 
-            # Filtriamo le colonne in base al valore ricevuto nel primo elemento (se esiste)
-            # Se il primo elemento ha "N/A" per una colonna, la escludiamo dal rendering
-            first_item = dependencies[0] if dependencies else {}
-            visible_keys = [
-                k for k in all_columns.keys() 
-                if k not in ["present_in_requirements", "present_in_poetry"] 
-                or first_item.get(k) != "N/A"
-            ]
+            with col_btn1:
+                st.link_button("🔗 Vedi Log Action", item["github_run_url"], use_container_width=True, key=f"link_custom_{i}")
 
-            # Calcoliamo i pesi (width) in base a quante colonne stiamo mostrando
-            cols = st.columns([1, 2, 1.5, 3] + [1.5] * (len(visible_keys) - 4) + [1.5])
-            headers = [all_columns[k] for k in visible_keys] + ["SBOM"]
+            with col_btn2:
+                json_str = json.dumps(item["content"], indent=4)
 
-            for i, h in enumerate(headers):
-                cols[i].markdown(f"**{h}**")
-            st.markdown("---")
+                st.download_button(
+                    label="⬇️ Scarica SBOM JSON",
+                    data=json_str,
+                    file_name=f"sbom_{item["filename"].replace('.', '_')}.json",
+                    mime="application/json",
+                    use_container_width=True,
+                    key=f"download_custom_{i}"
+                )
+        st.markdown("---")
 
-            # Rendering righe
-            for idx, item in enumerate(dependencies):
-                row_cols = st.columns([1, 2, 1.5, 3] + [1.5] * (len(visible_keys) - 4) + [1.5])
-                
-                c_url = item.get("url", "")
-                c_tipo = item.get("type", "")
-                
-                for i, key in enumerate(visible_keys):
-                    row_cols[i].write(item.get(key, "-"))
-                
-                # Colonna SBOM
-                with row_cols[-1]:
-                    
-                    # Creazione di un nome pulito per il file SBOM da scaricare, basato su URL e tipo, con sostituzione dei caratteri non alfanumerici
-                    url_clean = re.sub(r'[^a-zA-Z0-9]', '-', c_url.replace("https://", "").replace("http://", ""))
-                    url_clean = re.sub(r'-+', '-', url_clean).strip('-').lower()
-                    c_tipo_clean = c_tipo.lower()
+st.subheader("Calcolo Grafi")
+if st.button("Genera Grafi Dipendenze", use_container_width=True):
+    with st.spinner("Generazione grafi in corso..."):
+        try:
+            res_graphs = requests.get(f"{BACKEND_URL}/generate-graphs")
+            if res_graphs.status_code == 200:
+                graph_data = res_graphs.json()
+                st.session_state.deep_sbom_results = graph_data
+                st.success("Grafi generati con successo!")
+                st.rerun()
+            else:
+                error_msg = res_graphs.json().get("detail", "Errore sconosciuto")
+                st.error(f"Generazione Grafi Fallita: {error_msg}")
+        except Exception as e:
+            st.error(f"Errore di connessione: {str(e)}")
 
-                    deep_results = st.session_state.get("deep_sbom_results") or {}
-                    available_sboms = deep_results.get("sboms", {})
-
-                    # Cerchiamo se il file contiene ALMENO le parti fondamentali: 
-                    # il tipo e una parte significativa dell'URL (se l'URL è lungo)
-                    def is_match(file_key, tipo, url_part):
-                        file_key = file_key.lower()
-                        # Se è un file tipo apt/pip, il nome è spesso breve
-                        if tipo in ['apt', 'pip']:
-                            return tipo in file_key and url_part[:10] in file_key
-                        # Se è git/zip/altro, cerchiamo il tipo e il nome della repo
-                        return tipo in file_key and url_part in file_key
-
-                    matching_key = next((k for k in available_sboms.keys() if is_match(k, c_tipo_clean, url_clean)), None)
-                    
-
-                    if matching_key:
-                        st.download_button(
-                            label="⬇️ SBOM",
-                            data=available_sboms[matching_key],
-                            file_name=matching_key, 
-                            mime="application/json",
-                            key=f"dl_row_{idx}",
-                            use_container_width=True
-                        )
-                    else:
-                        st.button(
-                            label="🚫 Non Disp.", 
-                            key=f"disabled_row_{idx}", 
-                            disabled=True, 
-                            use_container_width=True
-                        )
-        # ============================================================
-        # SEZIONE DI ANALISI IMMAGINE DOCKER 
-        # ============================================================
-st.markdown("---")
 st.subheader("Sezione di Analisi Immagine Docker")
 
 if docker_choice == "Genera SBOM Docker":
@@ -631,7 +574,7 @@ st.subheader("Analisi delle Dipendenze (Grafo & Albero)")
 with st.container():
     
     # Unione dei grafi che arrivano da analisi diverse (Repo o Docker)
-    #repo_graphs = st.session_state.get("deep_sbom_results", {}).get("graphs", {})
+    repo_graphs = st.session_state.get("deep_sbom_results", {}).get("graphs", {})
     docker_graphs = st.session_state.get("docker_results", {}).get("graphs", {})
     hierarchy_with_weights = st.session_state.get("docker_results", {}).get("hierarchy_with_weights", {})
     
@@ -644,8 +587,8 @@ with st.container():
         }
     
     # Unione dei due dizionari
-    #all_graphs = {**repo_graphs, **normalized_docker_graphs}
-    all_graphs = normalized_docker_graphs  # Al momento consideriamo solo il grafo Docker per la visualizzazione
+    all_graphs = {**repo_graphs, **normalized_docker_graphs}
+    #all_graphs = normalized_docker_graphs  # Al momento consideriamo solo il grafo Docker per la visualizzazione
     if all_graphs:
         col_a, col_b = st.columns([2, 1])
         with col_a:
@@ -726,24 +669,3 @@ with st.container():
     
         st.info("Esegui un'analisi (Repo o Docker) per generare i grafi.")
     
-# ============================================================
-# TAB DI TRASPARENZA IN CODA (LOGS E FILE COMPLETI)
-# ============================================================
-st.markdown("---")
-st.subheader("📋 Log di Controllo e File di Configurazione Generati")
-
-tab_labels = ["🔗 Link GitHub Sorgenti"]
-
-tabs = st.tabs(tab_labels)
-current_tab_idx = 0
-
-with tabs[current_tab_idx]:
-    
-    if git_repos:
-    
-        for r in sorted(list(set(git_repos))): 
-            # Se la URL è valida -> cliccabile; altrimenti, visualizzala come testo normale
-            st.markdown(f"- [{r}]({r})" if r.startswith("http") else f"- {r}")
-    
-    else: st.info("Nessuna repository GitHub mappata.")
-current_tab_idx += 1

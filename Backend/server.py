@@ -358,7 +358,7 @@ def wait_and_download_artifacts(run_id: int, dest_dir: str):
                 file_path = os.path.join(dest_dir, file_name)
                 
                 # Smista in base al nome
-                if "requirements" in file_name or "poetry" in file_name or "uv" in file_name:
+                if file_name == "trivy_poetry.json" or file_name == "trivy_requirements.json" or file_name == "trivy_uv.json":
                     shutil.move(file_path, os.path.join(manifests_dir, file_name))
                 elif file_name != "docker_sbom.json" and file_name != "cyclonedx-license-SBOM.json" and file_name != "cyclonedx-vuln-SBOM.json":
                     shutil.move(file_path, os.path.join(deps_dir, file_name))
@@ -374,9 +374,9 @@ def wait_and_download_artifacts(run_id: int, dest_dir: str):
 # ============================================================
 
 def trigger_github_action(workflow_file: str, inputs: dict) -> Optional[dict]:
-    """Innesca una pipeline remota specifica e restituisce un dizionario con URL e Run ID."""
     headers = github_headers()
     if not headers:
+        print("[ERROR] GITHUB_TOKEN non trovato nelle variabili d'ambiente.")
         return None
 
     # URL dinamico basato sul file .yml passato come argomento
@@ -421,17 +421,6 @@ def remove_readonly(func, path, excinfo):
 # ===========================================================
 #  Funzione per il parsign del dockerfile
 # ===========================================================
-
-def parse_dockerfile_content(content: str):
-    return {
-        "uses_poetry": "poetry" in content,
-        "uses_uv": "uv" in content,
-        "uses_pip": "pip" in content and "poetry" not in content,
-        "base_image": [line.split()[1] for line in content.splitlines() if line.lower().startswith("from ")],
-        "is_multistage": content.lower().count("from ") > 1
-    }
-    
-
 
 def get_all_installs(dockerfile_content):
     parser = DockerfileParser()
@@ -666,127 +655,6 @@ def run_standard_sbom_action(repo_url, branch, format):
         "content": content
     }
 
-# ============================================================
-# ANALISI AVANZATA (Solo per dependencies.json)
-# ============================================================
-@app.post("/analyze-custom-file")
-def analyze_custom_file(
-    repo_url: str = Form(...), 
-    branch: str = Form(...), 
-    path_file: str = Form(...)
-):
-    tmp_clone = tempfile.mkdtemp() # Creiamo una cartella temporanea per il clone del repository
-    
-    try:
-    
-    # Clone leggero del repository per estrarre il file dipendenze custom
-        subprocess.run([
-            "git", "clone", "--depth", "1", "--branch", branch, repo_url, tmp_clone
-        ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-        target_file = None
-        for root, _, files in os.walk(tmp_clone):
-            if path_file in files:
-                target_file = os.path.join(root, path_file)
-                break
-
-        if not target_file:
-            raise HTTPException(404, f"File '{path_file}' non trovato nella repository.")
-
-        with open(target_file, "r", encoding="utf-8") as f:
-            dependencies = json.load(f)
-
-        if not isinstance(dependencies, list):
-            raise HTTPException(400, "Il file delle dipendenze deve essere una lista JSON.")
-        
-        # Funzione di utilità per estrarre identificatori dai file JSON generati
-        def extract_names_and_purls(file_path):
-            names = set()
-            purls = set()
-            if not os.path.exists(file_path):
-                return names, purls
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                
-                components_list = []
-                if isinstance(data, dict) and "components" in data:
-                    components_list = data["components"]
-                elif isinstance(data, dict) and "artifacts" in data:
-                    components_list = data["artifacts"]
-                elif isinstance(data, list):
-                    components_list = data
-
-                for item in components_list:
-                    if isinstance(item, dict):
-                        name = item.get("name")
-                        purl = item.get("purl")
-                        if name: names.add(str(name).lower().strip())
-                        if purl: purls.add(str(purl).lower().strip())
-                    elif isinstance(item, str):
-                        names.add(item.lower().strip())
-                return names, purls
-            
-            except Exception:
-                return names, purls
-
-        # Carichiamo gli identificatori reali per la mappatura delle colonne nella tabella
-        req_identifiers, _ = extract_names_and_purls(os.path.join(STORAGE_DIR, "trivy_requirements.json"))
-        poetry_identifiers, _ = extract_names_and_purls(os.path.join(STORAGE_DIR, "trivy_poetry.json"))
-
-        extracted_data = []
-        repos = []
-
-        # Analizziamo e integriamo la lista dipendenze del repository Git
-        for item in dependencies:
-            dep_type = item.get("type", "N/A")
-            name, version, purl = extract(item)
-            component_type = classify(dep_type)
-            github_repo = parse_github_url(item.get("url", ""))
-
-            if github_repo != "N/A":
-                repos.append(github_repo)
-
-            name_clean = str(name).lower().strip()
-            
-            if STANDARD_FILE_ANALYZED == "requirements.txt" or STANDARD_FILE_ANALYZED == "requirements":
-                is_in_req = "✅" if name_clean in req_identifiers else "❌"
-                is_in_poetry = "N/A"
-            elif STANDARD_FILE_ANALYZED == "pyproject.toml" or STANDARD_FILE_ANALYZED == "poetry":
-                is_in_req = "N/A"
-                is_in_poetry = "✅" if name_clean in poetry_identifiers else "❌"
-            else:
-                is_in_req = "✅" if name_clean in req_identifiers else "❌"
-                is_in_poetry = "✅" if name_clean in poetry_identifiers else "❌"
-
-            extracted_data.append({
-                "type": dep_type,
-                "component_type": component_type,
-                "name": name,
-                "version": version,
-                "purl": purl,
-                "url": item.get("url") or item.get("path") or "",
-                "github_repo": github_repo,
-                "present_in_requirements": is_in_req,
-                "present_in_poetry": is_in_poetry
-            })
-
-
-        return {
-            "status": "success",
-            "repo": repo_url,
-            "branch": branch,
-            "count": len(extracted_data),
-            "result": extracted_data,
-            "detected_git_repos": list(set(repos))
-        }
-
-    except Exception as e:
-        print(f"[CRITICAL ERROR] Fallimento catastrofico in compare_dependencies: {str(e)}", flush=True)
-        raise HTTPException(500, f"Errore interno del server: {str(e)}")
-    finally:
-        shutil.rmtree(tmp_clone, ignore_errors=True)
-        
 # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 # IN CASO MODIFICARE QUESTA FUNZIONE PER AGGIUNGERE NUOVI TIPI DI FILE O FORMATI DI DIPENDENZE
 # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -794,81 +662,80 @@ def analyze_custom_file(
 # ANALISI COMPONENTI DEPENDENCIES.JSON IN PARALLELO (con github action remota) e generazione SBOM per singole dipendenze
 # ============================================================
 
-@app.post("/analyze-dependencies-sbom")
-def analyze_dependencies_sbom(
-    repo_url: str = Form(...), 
-    branch: str = Form(...), 
-    path_file: str = Form(...)
+@app.post("/analyze-custom-file")
+def analyze_custom_file(
+    docker_image_tag_custom = Form(None),
+    vuln_type_custom = Form("os,library")
 ):
-    workflow_name = "dynamic_sbom.yml"
-
-    match = re.search(r"github\.com/([^/]+)/([^/?#]+)", repo_url)
-    owner_repo = f"{match.group(1)}/{match.group(2).replace('.git', '')}" if match else repo_url
+    os.makedirs(os.path.join(STORAGE_DIR, "manifests"), exist_ok=True)
+    os.makedirs(os.path.join(STORAGE_DIR, "dependencies"), exist_ok=True)
     
-    inputs = {
-        "src_repository": owner_repo,
-        "src_branch": branch,
-        "path_dipendenze": path_file
+    print(f"[BACKEND] Avvio pipeline Docker cusotm per l'immagine: {docker_image_tag_custom}", flush=True)
+    
+    # Allineamento Input con la tua GitHub Action (image_repository)
+    docker_inputs = {
+        "image_repository": docker_image_tag_custom,
+        "src_vuln_type": vuln_type_custom
     }
-    run_info = trigger_github_action(workflow_name, inputs)
-    
-    if not run_info:
-        raise HTTPException(status_code=500, detail="Impossibile avviare il workflow 'dynamic_sbom.yml' su GitHub. Verifica i log del server.")
-        
-    run_id = run_info["id"]
-    github_run_url = run_info["html_url"]
-    
-    print(f"[BACKEND] Pipeline avviata con Run ID: {run_id}. Inizio polling...", flush=True)
     
     try:
-        wait_and_download_artifacts(run_id, STORAGE_DIR)
+        docker_action_info_custom = trigger_github_action("sbom_dockerfile_custom.yml", docker_inputs) 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Errore durante il polling degli artifact: {str(e)}")
+        raise HTTPException(500, f"Impossibile avviare la pipeline Docker remota: {str(e)}")
+    
+    
+    # Attesa completamento e download dello ZIP (estratto in STORAGE_DIR)
+    success = wait_and_download_artifacts(docker_action_info_custom["id"], STORAGE_DIR)
+    if not success:
+        raise HTTPException(500, "Pipeline completata ma nessun artifact trovato.")
         
-    generated_sboms = {}
+    #cambio "\" e ":" in "_" per evitare problemi di path
+    docker_image_tag_custom = re.sub(r'[\\/:]', '_', docker_image_tag_custom)
     
-    # Definizione delle cartelle da scansionare
-    folders_to_scan = [
-        os.path.join(STORAGE_DIR, "manifests"),
-        os.path.join(STORAGE_DIR, "dependencies")
-    ]
-    
+    file_name = docker_image_tag_custom + "-custom-docker-SBOM.json"
     # Scansione dei file SBOM generati e caricamento in memoria per la visualizzazione
-    for folder in folders_to_scan:
-        if os.path.exists(folder):
-            for file_name in os.listdir(folder):
-                if file_name.endswith(".json"):
-                    
-                    file_path = os.path.join(folder, file_name)
-                    try:
-                        with open(file_path, "r", encoding="utf-8") as f:
-                            # Usiamo il path relativo o il nome come chiave
-                            generated_sboms[file_name] = f.read()
-                    except Exception as e:
-                        print(f"[BACKEND] Errore nella lettura {file_path}: {str(e)}", flush=True)
+    file_path = os.path.join(STORAGE_DIR, "dependencies", file_name)
+    print (f"[DEBUG] Tentativo di apertura del file: {file_path}", flush=True)
+    if not os.path.exists(file_path):
+        print(f"[ERROR] File SBOM generato non trovato: {file_path}", flush=True)
+        raise HTTPException(500, f"File SBOM generato non trovato: {file_path}")
+    
+    with open(file_path, "r", encoding="utf-8") as f:
+        content = json.load(f)
     
     # Generazione dei dati per la visualizzazione del grafo
     graph_results = {}
     graph_results.update(generate_graphs_for_folder(os.path.join(STORAGE_DIR, "manifests")))
     graph_results.update(generate_graphs_for_folder(os.path.join(STORAGE_DIR, "dependencies")))
-   
+    
+    data = {
+        "filename": file_name,
+        "content": content,
+        "github_run_url": docker_action_info_custom["html_url"],
+    }
+        
     return {
         "status": "success",
-        "github_run_url": github_run_url,
-        "sboms": generated_sboms,
+        "data": data,
         "graphs": graph_results
     }
 
-# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-# IN CASO MODIFICARE QUESTA FUNZIONE PER AGGIUNGERE NUOVI TIPI DI FILE O FORMATI DI DIPENDENZE
-# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+@app.get("/generate-graphs")
+def generate_graphs():
+    graphs = {}
+    graphs.update(generate_graphs_for_folder(os.path.join(STORAGE_DIR, "manifests")))
+    graphs.update(generate_graphs_for_folder(os.path.join(STORAGE_DIR, "dependencies")))
+    return {"status": "success", "graphs": graphs}
 
 # ============================================================
 # GENERAZIONE SBOM DOCKER REMOTA e ANALISI COMPARATIVA IMMEDIATA
 # ============================================================
 
 @app.post("/generate-docker-sbom")
-def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
+def generate_docker_sbom(
+    docker_target: str, 
+    vuln_type: str = "os,library"
+):
     
     os.makedirs(os.path.join(STORAGE_DIR, "manifests"), exist_ok=True)
     os.makedirs(os.path.join(STORAGE_DIR, "dependencies"), exist_ok=True)
