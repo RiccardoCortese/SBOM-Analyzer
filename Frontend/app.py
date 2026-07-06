@@ -134,6 +134,7 @@ if st.button("🔄 Invia e Avvia Discovery"):
                 if "files" in risposta:
                     st.session_state.found_files = risposta.get("files", [])
                     st.session_state.install_commands = risposta.get("install_commands", [])
+                    st.session_state.images = risposta.get("images", [])
                     st.info(f"Ho trovato {len(st.session_state.found_files)} file di dipendenze.")
                 st.rerun()
             else:
@@ -156,10 +157,16 @@ if "found_files" in st.session_state and st.session_state.found_files:
     if "install_commands" in st.session_state and st.session_state.install_commands:
         st.subheader("Comandi di installazione rilevati")
         for cmd in st.session_state.install_commands:
-            st.code(cmd, language="bash")
+            st.code(f"RUN {cmd}", language="bash")
     else:
         st.info("Nessun comando di installazione rilevato.")
 
+    if "images" in st.session_state and st.session_state.images:
+        st.subheader("Immagini Docker rilevate")
+        for img in st.session_state.images:
+            st.code(f"FROM {img}", language="docker")
+    else:
+        st.info("Nessuna immagine Docker rilevata.")
     st.markdown("---")
     
     
