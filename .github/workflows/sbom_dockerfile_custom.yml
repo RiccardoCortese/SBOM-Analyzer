@@ -16,56 +16,64 @@ on:
           - 'library'
           - 'os,library'
         default: 'os,library'
+
 env:
   OUTPUT_NAME: 'cyclonedxSBOM'
+
 jobs:
   build:
     runs-on: ubuntu-latest
+
     permissions:
-      contents: read 
-      security-events: write 
-      actions: read 
-    
+      contents: read
+      security-events: write
+      actions: read
+
     steps:
+
+      - name: Prepare filenames
+        run: |
+          SAFE_NAME=$(echo "${{ inputs.image_repository }}" | sed 's#[/:]#_#g')
+          echo "SAFE_NAME=$SAFE_NAME" >> $GITHUB_ENV
+          echo "SBOM_FILE=${SAFE_NAME}-custom-docker-SBOM.json" >> $GITHUB_ENV
+          echo "VULN_FILE=${SAFE_NAME}-custom-docker-vuln-SBOM.json" >> $GITHUB_ENV
+          echo "LIC_FILE=${SAFE_NAME}-custom-docker-license-SBOM.json" >> $GITHUB_ENV
 
       - name: Generate SBOM
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ inputs.image_repository }}
           format: 'cyclonedx'
-          output: 'custom-docker-SBOM.json'
-          #severity: 'CRITICAL,HIGH'
+          output: ${{ env.SBOM_FILE }}
           exit-code: '0'
           vuln-type: ${{ inputs.src_vuln_type }}
-      
+
       - name: Run Trivy for vulnerability scanner
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: 'sbom'
-          scan-ref: 'custom-docker-SBOM.json'
+          scan-ref: ${{ env.SBOM_FILE }}
           format: 'cyclonedx'
-          output: 'custom-docker-vuln-SBOM.json'
+          output: ${{ env.VULN_FILE }}
           exit-code: '0'
           vuln-type: ${{ inputs.src_vuln_type }}
           scanners: 'vuln'
-          # On a subsequent call to the action we know trivy is already installed so can skip this
           skip-setup-trivy: true
-          
+
       - name: Run Trivy for license scanner
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: 'sbom'
-          scan-ref: 'custom-docker-SBOM.json'
+          scan-ref: ${{ env.SBOM_FILE }}
           format: 'cyclonedx'
-          output: 'custom-docker-license-SBOM.json'
+          output: ${{ env.LIC_FILE }}
           exit-code: '0'
           vuln-type: ${{ inputs.src_vuln_type }}
           scanners: 'license'
-          # On a subsequent call to the action we know trivy is already installed so can skip this
           skip-setup-trivy: true
-          
+
       - name: Upload Trivy results
         uses: actions/upload-artifact@v7
         with:
-           name: ${{ env.OUTPUT_NAME }}
-           path: ${{github.workspace}}/*.json     
+          name: ${{ env.OUTPUT_NAME }}
+          path: ${{ github.workspace }}/*.json
