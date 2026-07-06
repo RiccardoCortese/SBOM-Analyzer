@@ -436,35 +436,25 @@ def parse_dockerfile_content(content: str):
 def get_all_installs(dockerfile_content):
     parser = DockerfileParser()
     parser.content = dockerfile_content
-    
+
     run_commands = []
-    current_cmd = ""
-    
-    # parser.lines contiene le istruzioni già pulite dalla libreria
-    for line in parser.lines:
-        line_stripped = line.strip()
-        
-        # Se la riga inizia con RUN, inizia un nuovo comando
-        if line_stripped.lower().startswith("run "):
-            current_cmd = line_stripped.strip()
-            
-            # Se il comando corrente è completo (non finisce con \), lo aggiungiamo subito
-            if not current_cmd.endswith('\\'):
-                run_commands.append(current_cmd)
-                current_cmd = ""
-        
-        # Se siamo in un comando multi-riga (accumulato in current_cmd)
-        elif current_cmd:
-            clean_line = line_stripped.rstrip('\\').strip()
-            current_cmd += " " + clean_line
-            
-            # Se la riga NON finisce con \, il comando è finito
-            if not line_stripped.endswith('\\'):
-                run_commands.append(current_cmd)
-                current_cmd = ""
-    
-    # Filtriamo solo i comandi che contengono installazioni
-    return run_commands
+    images = []
+
+    for inst in parser.structure:
+        instruction = inst["instruction"].upper()
+        value = inst["value"]
+
+        if instruction == "RUN":
+            run_commands.append(value)
+
+        elif instruction == "FROM":
+            if "ghcr.io/" in value or "docker.io/" in value or "quay.io/" in value or "registry.gitlab.com/" in value:
+                images.append(value)
+
+    return {
+        "run": run_commands,
+        "images": images
+    }
 # ============================================================
 # ACQUISIZIONE E SALVATAGGIO IN MEMORIA SERVER di file JSON manuali o generati
 # ============================================================
@@ -475,6 +465,7 @@ async def upload_sbom(
     mode: str = Form("manual"), # Default manuale
     repo_url: Optional[str] = Form(None), # Necessario per clonare
     branch: Optional[str] = Form(None), # Necessario per clonare
+    dockerfile_path: Optional[str] = Form(None), # Necessario per clonare
     requirements_file: Optional[UploadFile] = File(None),
     poetry_file: Optional[UploadFile] = File(None),
     docker_file: Optional[UploadFile] = File(None),
@@ -497,22 +488,23 @@ async def upload_sbom(
                 subprocess.run(["git", "clone", "--depth", "1", repo_url, tmp_clone], check=True)
                 
             found_files = []
-            docker_analysis = None
             valid_patterns = ["requirements.txt", "pyproject.toml", "poetry.lock", "uv.lock"]
             
             for root, _, files in os.walk(tmp_clone):
                 for f in files:
-                    if f == "Dockerfile":
-                        file_path = os.path.join(root, f)
-                        with open(file_path, 'r') as df:
-                            docker_content = df.read()
-                            docker_analysis = parse_dockerfile_content(docker_content)
-                    
                     if f in valid_patterns:
                         rel_path = os.path.relpath(root, tmp_clone).replace(os.sep, "_")
                         dest_name = f"{rel_path}_{f}" if rel_path != "." else f
                         shutil.copy(os.path.join(root, f), os.path.join(STORAGE_DIR, dest_name))
                         found_files.append(dest_name)
+            
+            # Cerco il Dockerfile per estrarre i comandi di installazione e le immagini di base, prendendo il path da dockerfile_path
+            docker_content = None
+            if dockerfile_path:
+                dockerfile_full_path = os.path.join(tmp_clone, dockerfile_path)
+                if os.path.exists(dockerfile_full_path):
+                    with open(dockerfile_full_path, "r") as df:
+                        docker_content = df.read()
             
             if not found_files:
                 raise HTTPException(400, "Nessun file di dipendenze rilevato.")
@@ -520,12 +512,16 @@ async def upload_sbom(
             with open(os.path.join(STORAGE_DIR, "discovered_files.json"), "w") as f:
                 json.dump(found_files, f)
             
-            install_commands = get_all_installs(docker_content) if docker_content else []
+            result = get_all_installs(docker_content) if docker_content else {"run": [], "images": []}
+
+            install_commands = result["run"]
+            images = result["images"]
 
             return {
                 "status": "success", 
                 "files": found_files, 
-                "install_commands": install_commands
+                "install_commands": install_commands,
+                "images": images
             }
             
         finally:

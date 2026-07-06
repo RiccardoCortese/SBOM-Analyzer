@@ -134,6 +134,7 @@ if st.button("🔄 Invia e Avvia Discovery"):
                 if "files" in risposta:
                     st.session_state.found_files = risposta.get("files", [])
                     st.session_state.install_commands = risposta.get("install_commands", [])
+                    st.session_state.images = risposta.get("images", [])
                     st.info(f"Ho trovato {len(st.session_state.found_files)} file di dipendenze.")
                 st.rerun()
             else:
@@ -156,10 +157,16 @@ if "found_files" in st.session_state and st.session_state.found_files:
     if "install_commands" in st.session_state and st.session_state.install_commands:
         st.subheader("Comandi di installazione rilevati")
         for cmd in st.session_state.install_commands:
-            st.code(cmd, language="bash")
+            st.code(f"RUN {cmd}", language="bash")
     else:
         st.info("Nessun comando di installazione rilevato.")
 
+    if "images" in st.session_state and st.session_state.images:
+        st.subheader("Immagini Docker rilevate")
+        for img in st.session_state.images:
+            st.code(f"FROM {img}", language="docker")
+    else:
+        st.info("Nessuna immagine Docker rilevata.")
     st.markdown("---")
     
     # ===========================================================
@@ -557,7 +564,7 @@ if st.session_state.docker_analyzed and current_docker_report and current_docker
     
     
     with st.expander(f"🔴 Pacchetti solo dentro l'Immagine Docker ({current_docker_report.get('packages_only_in_docker_count', 0)})"):
-        st. info("Questa sezione mostra i pacchetti presenti solo nell'immagine Docker. Si noti che alcune dipendenze possono essere presenti più volte con versioni diverse all'interno dello SBOM Docker. Questo perchè potrebbero esserci dei residui di build.")
+        st. info("Questa sezione mostra i pacchetti presenti solo nell'immagine Docker.")
         
         if current_docker_report.get("only_in_docker"):
             data = []
@@ -588,7 +595,7 @@ if st.session_state.docker_analyzed and current_docker_report and current_docker
             st.info("Nessuna discrepanza di versione rilevata.")
         
     with st.expander(f"❌ Pacchetti Mancanti nel Docker SBOM ({len(current_docker_report.get('missing_in_docker', []))})"):
-        st. info("Questa sezione mostra le dipendenze che sono presenti nei sorgenti della repository ma non sono state rilevate nell'immagine Docker. Questo può indicare che alcune librerie non sono state incluse nella build dell'immagine.")
+        st. info("Questa sezione mostra le dipendenze che sono presenti nei sorgenti della repository ma non sono state rilevate nell'immagine Docker.")
         missing_in_docker = current_docker_report.get("missing_in_docker", [])
         
         if missing_in_docker:
