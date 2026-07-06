@@ -1,0 +1,71 @@
+name: Container Image SBOM using Trivy
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_repository:
+        description: 'Container Image Repository'
+        required: true
+        default: ''
+      src_vuln_type:
+        description: Vulnerability types (os,library). Default os,library.
+        required: false
+        type: choice
+        options:
+          - 'os'
+          - 'library'
+          - 'os,library'
+        default: 'os,library'
+env:
+  OUTPUT_NAME: 'cyclonedxSBOM'
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read 
+      security-events: write 
+      actions: read 
+    
+    steps:
+
+      - name: Generate SBOM
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ inputs.image_repository }}
+          format: 'cyclonedx'
+          output: 'custom-docker-SBOM.json'
+          #severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+          vuln-type: ${{ inputs.src_vuln_type }}
+      
+      - name: Run Trivy for vulnerability scanner
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: 'sbom'
+          scan-ref: 'custom-docker-SBOM.json'
+          format: 'cyclonedx'
+          output: 'custom-docker-vuln-SBOM.json'
+          exit-code: '0'
+          vuln-type: ${{ inputs.src_vuln_type }}
+          scanners: 'vuln'
+          # On a subsequent call to the action we know trivy is already installed so can skip this
+          skip-setup-trivy: true
+          
+      - name: Run Trivy for license scanner
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: 'sbom'
+          scan-ref: 'custom-docker-SBOM.json'
+          format: 'cyclonedx'
+          output: 'custom-docker-license-SBOM.json'
+          exit-code: '0'
+          vuln-type: ${{ inputs.src_vuln_type }}
+          scanners: 'license'
+          # On a subsequent call to the action we know trivy is already installed so can skip this
+          skip-setup-trivy: true
+          
+      - name: Upload Trivy results
+        uses: actions/upload-artifact@v7
+        with:
+           name: ${{ env.OUTPUT_NAME }}
+           path: ${{github.workspace}}/*.json     
