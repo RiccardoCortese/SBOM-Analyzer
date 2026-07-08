@@ -12,6 +12,7 @@ import zipfile
 from typing import Optional
 import stat
 from dockerfile_parse import DockerfileParser
+import fnmatch
 
 # ============================================================
 # CONFIGURAZIONE INIZIALE E VARIABILI GLOBALI
@@ -478,14 +479,18 @@ async def upload_sbom(
                 subprocess.run(["git", "clone", "--depth", "1", repo_url, tmp_clone], check=True)
                 
             found_files = []
-            valid_patterns = ["requirements.txt", "pyproject.toml", "poetry.lock", "uv.lock", "dependencies.json"]
+           # Questi sono i pattern di file "standard" che consideriamo validi per l'analisi delle dipendenze 
+            valid_patterns = ["requirements.txt", "pyproject.toml", "setup.py", "*.lock"]
             
             for root, _, files in os.walk(tmp_clone):
                 for f in files:
-                    if f in valid_patterns:
+                    if any(fnmatch.fnmatch(f, pattern) for pattern in valid_patterns):
                         rel_path = os.path.relpath(root, tmp_clone).replace(os.sep, "_")
                         dest_name = f"{rel_path}_{f}" if rel_path != "." else f
-                        shutil.copy(os.path.join(root, f), os.path.join(STORAGE_DIR, dest_name))
+                        shutil.copy(
+                            os.path.join(root, f),
+                            os.path.join(STORAGE_DIR, dest_name)
+                        )
                         found_files.append(dest_name)
             
             # Cerco il Dockerfile per estrarre i comandi di installazione e le immagini di base, prendendo il path da dockerfile_path
