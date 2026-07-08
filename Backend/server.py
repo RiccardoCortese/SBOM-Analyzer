@@ -13,6 +13,7 @@ from typing import Optional
 import stat
 from dockerfile_parse import DockerfileParser
 import fnmatch
+import glob as glb
 
 # ============================================================
 # CONFIGURAZIONE INIZIALE E VARIABILI GLOBALI
@@ -158,7 +159,7 @@ def generate_graphs_for_folder(folder_path):
         return graphs
     for file_name in os.listdir(folder_path):
         if file_name.endswith(".json"):
-            if "vuln" in file_name or "license" in file_name:
+            if "vuln" in file_name or "license" in file_name or file_name == "discovered_files.json":
                 continue  # Ignora file di vulnerabilità e licenze
             else:
                 file_path = os.path.join(folder_path, file_name)
@@ -728,11 +729,68 @@ def analyze_custom_file(
         "graphs": graph_results
     }
 
+# ============================================================
+# FUNZIONE DI SUPPORTO PER IL MERGE DEI FILE SBOM (USANDO IL TOOL CycloneDX CLI)
+# ============================================================
+
+def get_cyclonedx_path():
+    bin_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin")
+    os.makedirs(bin_dir, exist_ok=True)
+    bin_path = os.path.join(bin_dir, "cyclonedx-win-x64.exe")
+    
+    # Se il file manca, lo scarichiamo al volo
+    if not os.path.exists(bin_path):
+        print("[BACKEND] Tool non trovato. Download in corso...")
+        url = "https://github.com/CycloneDX/cyclonedx-cli/releases/latest/download/cyclonedx-win-x64.exe"
+        response = requests.get(url)
+        with open(bin_path, "wb") as f:
+            f.write(response.content)
+    return bin_path
+
+# ============================================================
+# MERGE DEI FILE SBOM TROVATI NELLE CARTELLE "manifests" e "dependencies" IN UN UNICO FILE SBOM FINALE
+# ============================================================
+
+@app.get("/merge-artifacts")
+def merge_artifacts():
+    # Recupera tutti i file JSON da "manifests" e "dependencies" per il merge
+    files_to_merge = glb.glob(os.path.join(STORAGE_DIR, "manifests", "*.json")) + \
+                     glb.glob(os.path.join(STORAGE_DIR, "dependencies", "*.json"))
+                     
+    if not files_to_merge:
+        raise HTTPException(status_code=400, detail="Nessun file SBOM trovato per il merge.")
+    
+    final_sbom = os.path.join(STORAGE_DIR, "final_merged_sbom.json")
+    cyclonedx_exe = get_cyclonedx_path()
+    
+    # Verifica che il binario esista davvero (per cyclonedx)
+    if not os.path.exists(cyclonedx_exe):
+        raise HTTPException(status_code=500, detail="Tool CycloneDX CLI non trovato. Esegui il setup del binario.")
+    
+    subprocess.run([cyclonedx_exe, "--version"], check=True)  # Controllo versione per debug
+    # Esegue il merge usando il percorso assoluto del binario
+    # Comando ufficiale: cyclonedx merge --input-files file1.json file2.json --output-file final_merged_sbom.json
+    merge_cmd = [cyclonedx_exe, "merge", "--input-files"] + files_to_merge + ["--output-file", final_sbom]
+    
+    try:
+        subprocess.run(merge_cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=500, detail=f"Errore durante il merge CycloneDX: {e}")
+    
+    with open(final_sbom, "r", encoding="utf-8") as f:
+        content = json.load(f) 
+    
+    return {"status": "success", "data": content, "merged_file": final_sbom}
+# ============================================================
+# GENERAZIONE GRAFI PER TUTTI I FILE TROVATI NELLA CARTELLA STORAGE (manifests e dependencies)
+# ============================================================
+
 @app.get("/generate-graphs")
 def generate_graphs():
     graphs = {}
     graphs.update(generate_graphs_for_folder(os.path.join(STORAGE_DIR, "manifests")))
     graphs.update(generate_graphs_for_folder(os.path.join(STORAGE_DIR, "dependencies")))
+    graphs.update(generate_graphs_for_folder(STORAGE_DIR))  # Include anche eventuali file SBOM nella root
     return {"status": "success", "graphs": graphs}
 
 # ============================================================
