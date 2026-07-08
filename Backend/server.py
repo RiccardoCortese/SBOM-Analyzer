@@ -12,6 +12,7 @@ import zipfile
 from typing import Optional
 import stat
 from dockerfile_parse import DockerfileParser
+import fnmatch
 
 # ============================================================
 # CONFIGURAZIONE INIZIALE E VARIABILI GLOBALI
@@ -157,13 +158,16 @@ def generate_graphs_for_folder(folder_path):
         return graphs
     for file_name in os.listdir(folder_path):
         if file_name.endswith(".json"):
-            file_path = os.path.join(folder_path, file_name)
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    content = f.read()
-                    graphs[file_name] = extract_graph_data(content)
-            except Exception as e:
-                print(f"[ERROR] Impossibile generare grafo per {file_name}: {e}")
+            if "vuln" in file_name or "license" in file_name:
+                continue  # Ignora file di vulnerabilità e licenze
+            else:
+                file_path = os.path.join(folder_path, file_name)
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                        graphs[file_name] = extract_graph_data(content)
+                except Exception as e:
+                    print(f"[ERROR] Impossibile generare grafo per {file_name}: {e}")
     return graphs
 
 # ============================================================
@@ -477,16 +481,20 @@ async def upload_sbom(
                 subprocess.run(["git", "clone", "--depth", "1", repo_url, tmp_clone], check=True)
                 
             found_files = []
-            valid_patterns = ["requirements.txt", "pyproject.toml", "poetry.lock", "uv.lock"]
+            # Questi sono i pattern di file "standard" che consideriamo validi per l'analisi delle dipendenze 
+            valid_patterns = ["requirements.txt", "pyproject.toml", "setup.py", "*.lock"]
             
             for root, _, files in os.walk(tmp_clone):
                 for f in files:
-                    if f in valid_patterns:
+                    if any(fnmatch.fnmatch(f, pattern) for pattern in valid_patterns):
                         rel_path = os.path.relpath(root, tmp_clone).replace(os.sep, "_")
                         dest_name = f"{rel_path}_{f}" if rel_path != "." else f
-                        shutil.copy(os.path.join(root, f), os.path.join(STORAGE_DIR, dest_name))
+                        shutil.copy(
+                            os.path.join(root, f),
+                            os.path.join(STORAGE_DIR, dest_name)
+                        )
                         found_files.append(dest_name)
-            
+                        
             # Cerco il Dockerfile per estrarre i comandi di installazione e le immagini di base, prendendo il path da dockerfile_path
             docker_content = None
             if dockerfile_path:
@@ -803,18 +811,21 @@ def generate_docker_sbom(
                 for root, _, files in os.walk(folder):
                     for file_name in files:
                         if file_name.endswith(".json") and file_name not in ignore_files:
-                            with open(os.path.join(root, file_name), "r", encoding="utf-8") as f:
-                                data = json.load(f)
-                                items = data.get("components", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
-                                for c in items:
-                                    if isinstance(c, dict) and c.get("purl"):
-                                        purl = str(c["purl"]).lower().strip()
-                                        if purl not in global_map: global_map[purl] = []
-                                        global_map[purl].append({
-                                            "source": file_name,
-                                            "name": c.get("name"),
-                                            "version": c.get("version")
-                                        })
+                            if "vuln" in file_name or "license" in file_name:
+                                continue  # Ignora file di vulnerabilità e licenze
+                            else:
+                                with open(os.path.join(root, file_name), "r", encoding="utf-8") as f:
+                                    data = json.load(f)
+                                    items = data.get("components", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+                                    for c in items:
+                                        if isinstance(c, dict) and c.get("purl"):
+                                            purl = str(c["purl"]).lower().strip()
+                                            if purl not in global_map: global_map[purl] = []
+                                            global_map[purl].append({
+                                                "source": file_name,
+                                                "name": c.get("name"),
+                                                "version": c.get("version")
+                                            })
         return global_map
     
     # Recuperiamo la mappa globale dei componenti del codice per il confronto con lo SBOM Docker
