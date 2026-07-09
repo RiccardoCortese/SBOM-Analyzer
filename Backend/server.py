@@ -219,19 +219,19 @@ def build_universal_hierarchy(name_sbom_file_docker: str, folder_path: str):
     all_dependencies_data = {}
     
     # Raccolta dei file
-    search_paths = [os.path.join(folder_path, d) for d in ["manifests", "dependencies"] 
-                    if os.path.exists(os.path.join(folder_path, d))]
+    #search_paths = [os.path.join(folder_path, d) for d in ["manifests", "dependencies"] 
+                    #if os.path.exists(os.path.join(folder_path, d))]
     
     # Analizziamo tutti i file JSON trovati nelle cartelle specificate
-    for path in search_paths:
-        for file_name in os.listdir(path):
-            if file_name.endswith(".json"):
-                file_path = os.path.join(path, file_name)
-                try:
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        all_dependencies_data[file_name] = get_all_dependecies(f.read())
-                except Exception as e:
-                    print(f"[ERROR] Impossibile elaborare {file_name}: {e}")
+    #for path in search_paths:
+    for file_name in os.listdir(folder_path):
+        if file_name == "final_merged_sbom.json":
+            file_path = os.path.join(folder_path, file_name)
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    all_dependencies_data[file_name] = get_all_dependecies(f.read())
+            except Exception as e:
+                print(f"[ERROR] Impossibile elaborare {file_name}: {e}")
                     
 
     # Conversione in un'unica mappa di dipendenze per facilitare la costruzione della gerarchia totale
@@ -913,7 +913,20 @@ def generate_graphs():
     graphs.update(generate_graphs_for_folder(os.path.join(STORAGE_DIR, "manifests")))
     graphs.update(generate_graphs_for_folder(os.path.join(STORAGE_DIR, "dependencies")))
     graphs.update(generate_graphs_for_folder(STORAGE_DIR))  # Include anche eventuali file SBOM nella root
-    return {"status": "success", "graphs": graphs}
+    
+    memo = {}
+    hierarchy_with_weights_merged = {}
+    final_merged_sbom_graph = build_universal_hierarchy("final_merged_sbom.json", STORAGE_DIR)
+
+    for purl in final_merged_sbom_graph:
+        stats = get_dependency_weight(purl, final_merged_sbom_graph, memo, visited_global=set())
+        hierarchy_with_weights_merged[purl] = {
+            "dependencies": final_merged_sbom_graph[purl],
+            "weight": stats[0],
+            "overlap": stats[2]
+        }
+
+    return {"status": "success", "graphs": graphs, "hierarchy_with_weights_merged": hierarchy_with_weights_merged}
 
 # ============================================================
 # GENERAZIONE SBOM DOCKER REMOTA e ANALISI COMPARATIVA IMMEDIATA

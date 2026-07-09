@@ -37,6 +37,8 @@ if "analysis_results_advanced" not in st.session_state:
     st.session_state.analysis_results_advanced = False
 if "deep_sbom_results" not in st.session_state:
     st.session_state.deep_sbom_results = None
+if "graph_results" not in st.session_state:
+    st.session_state.graph_results = None
 if "docker_analyzed" not in st.session_state:
     st.session_state.docker_analyzed = False
 if "docker_results" not in st.session_state:
@@ -415,7 +417,12 @@ if st.session_state.analysis_results is not None:
                             disabled=True, 
                             use_container_width=True
                         )
-                        
+    
+    # ===========================================================
+    # SEZIONE DI MERGE ARTEFATTI E GRAFICI DI DIPENDENZA
+    # ===========================================================
+    
+    st.markdown("---")
     st.subheader("Calcolo Grafi e merge artefatti")
     col1, col2 = st.columns([1, 1])
 
@@ -444,7 +451,7 @@ if st.session_state.analysis_results is not None:
                     res_graphs = requests.get(f"{BACKEND_URL}/generate-graphs")
                     if res_graphs.status_code == 200:
                         graph_data = res_graphs.json()
-                        st.session_state.deep_sbom_results = graph_data
+                        st.session_state.graph_results = graph_data
                         st.success("Grafi generati con successo!")
                         st.rerun()
                     else:
@@ -463,6 +470,7 @@ if st.session_state.analysis_results is not None:
         )
         with st.container(height=300):
             st.json(st.session_state.merged_results["data"])
+            
     # ============================================================
     # SEZIONE DI ANALISI IMMAGINE DOCKER 
     # ============================================================
@@ -682,14 +690,15 @@ if st.session_state.analysis_results is not None:
     st.subheader("Analisi delle Dipendenze (Grafo & Albero)")
 
     with st.container():
-        if not st.session_state.deep_sbom_results:
+        if not st.session_state.graph_results:
             st.info("Esegui un'analisi Docker per generare i grafi delle dipendenze.")
             st.stop()
             
         # Unione dei grafi che arrivano da analisi diverse (Repo o Docker)
-        repo_graphs = st.session_state.get("deep_sbom_results", {}).get("graphs", {})
+        repo_graphs = st.session_state.get("graph_results", {}).get("graphs", {})
         docker_graphs = st.session_state.get("docker_results", {}).get("graphs", {})
         hierarchy_with_weights = st.session_state.get("docker_results", {}).get("hierarchy_with_weights", {})
+        hierarchy_with_weights_merged = {**st.session_state.get("graph_results", {}).get("hierarchy_with_weights", {}), **hierarchy_with_weights}
         
         normalized_docker_graphs = {}
         for purl, deps in docker_graphs.items():
@@ -741,8 +750,18 @@ if st.session_state.analysis_results is not None:
             
             agraph(nodes=nodes, edges=edges, config=config)
 
+            # ============================================================
+            # SEZIONE DI ANALISI DEL PESO DELLE DIPENDENZE
+            # ============================================================
             
-            if file_selezionato == "Docker_SBOM" and hierarchy_with_weights:
+            if file_selezionato == "Docker_SBOM" or file_selezionato == "final_merged_sbom.json":
+                if file_selezionato == "final_merged_sbom.json":
+                    print("Usando i pesi uniti per il grafico finale")
+                    hierarchy_with_weights = hierarchy_with_weights_merged
+                elif file_selezionato == "Docker_SBOM":
+                    print("Usando i pesi Docker per il grafico Docker")
+                    hierarchy_with_weights = hierarchy_with_weights
+                
                 st.divider()
                 st.subheader("📊 Analisi Impatto Dipendenze")
                 
