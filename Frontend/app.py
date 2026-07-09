@@ -29,6 +29,8 @@ if "saved_format" not in st.session_state:
     st.session_state.saved_format = "entrambi"
 if "analysis_results" not in st.session_state:
     st.session_state.analysis_results = None
+if "merged_results" not in st.session_state:
+    st.session_state.merged_results = None
 if "analysis_results_standard" not in st.session_state:
     st.session_state.analysis_results_standard = None
 if "analysis_results_advanced" not in st.session_state:
@@ -413,9 +415,57 @@ if st.session_state.analysis_results is not None:
                             disabled=True, 
                             use_container_width=True
                         )
-        # ============================================================
-        # SEZIONE DI ANALISI IMMAGINE DOCKER 
-        # ============================================================
+                        
+    st.subheader("Calcolo Grafi e merge artefatti")
+    col1, col2 = st.columns([1, 1])
+
+    with col1:
+        st.info("Clicca qui per unire gli artefatti")
+        if st.button("Unisci Artefatti SBOM", use_container_width=True):
+            with st.spinner("Unione artefatti in corso..."):
+                try:
+                    res_merge = requests.get(f"{BACKEND_URL}/merge-artifacts")
+                    if res_merge.status_code == 200:
+                        merge_data = res_merge.json()
+                        st.session_state.merged_results = merge_data
+                        st.success("Artefatti uniti con successo!")
+                        st.rerun()
+                    else:
+                        error_msg = res_merge.json().get("detail", "Errore sconosciuto")
+                        st.error(f"Unione Artefatti Fallita: {error_msg}")
+                except Exception as e:
+                    st.error(f"Errore di connessione: {str(e)}")
+
+    with col2:
+        st.info("Clicca qui per generare i grafi delle dipendenze")
+        if st.button("Genera Grafi Dipendenze", use_container_width=True):
+            with st.spinner("Generazione grafi in corso..."):
+                try:
+                    res_graphs = requests.get(f"{BACKEND_URL}/generate-graphs")
+                    if res_graphs.status_code == 200:
+                        graph_data = res_graphs.json()
+                        st.session_state.deep_sbom_results = graph_data
+                        st.success("Grafi generati con successo!")
+                        st.rerun()
+                    else:
+                        error_msg = res_graphs.json().get("detail", "Errore sconosciuto")
+                        st.error(f"Generazione Grafi Fallita: {error_msg}")
+                except Exception as e:
+                    st.error(f"Errore di connessione: {str(e)}")
+
+    if st.session_state.merged_results is not None:
+        st.subheader("📦 Risultati Unione Artefatti SBOM")
+        st.download_button(
+            label="Scarica SBOM Unificato",
+            data=json.dumps(st.session_state.merged_results["data"]),
+            file_name="final_merged_sbom.json",
+            mime="application/json"
+        )
+        with st.container(height=300):
+            st.json(st.session_state.merged_results["data"])
+    # ============================================================
+    # SEZIONE DI ANALISI IMMAGINE DOCKER 
+    # ============================================================
     st.markdown("---")
     st.subheader("Sezione di Analisi Immagine Docker")
     
@@ -632,7 +682,10 @@ if st.session_state.analysis_results is not None:
     st.subheader("Analisi delle Dipendenze (Grafo & Albero)")
 
     with st.container():
-        
+        if not st.session_state.deep_sbom_results:
+            st.info("Esegui un'analisi Docker per generare i grafi delle dipendenze.")
+            st.stop()
+            
         # Unione dei grafi che arrivano da analisi diverse (Repo o Docker)
         repo_graphs = st.session_state.get("deep_sbom_results", {}).get("graphs", {})
         docker_graphs = st.session_state.get("docker_results", {}).get("graphs", {})
@@ -662,9 +715,16 @@ if st.session_state.analysis_results is not None:
         
             graph_data = all_graphs[file_selezionato]
           
-         
-            # Creazione nodi e archi
-            nodes = [Node(id=n["id"], label=n["label"], size=15) for n in graph_data["nodes"]]
+            # Creazione di un dizionario per rimuovere eventuali nodi duplicati, risultato del merge tra file diversi
+            unique_nodes = {}
+
+            for n in graph_data["nodes"]:
+                unique_nodes[n["id"]] = n
+
+            nodes = [
+                Node(id=n["id"], label=n["label"], size=15)
+                for n in unique_nodes.values()
+            ]
             edges = [Edge(source=e["source"], target=e["target"]) for e in graph_data["edges"]]
             
             is_hierarchical = (modalita == "Albero Gerarchico") # Se l'utente sceglie la modalità ad albero, abilitiamo il layout gerarchico

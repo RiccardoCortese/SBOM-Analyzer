@@ -13,6 +13,7 @@ from typing import Optional
 import stat
 from dockerfile_parse import DockerfileParser
 import fnmatch
+import glob as glb
 
 # ============================================================
 # CONFIGURAZIONE INIZIALE E VARIABILI GLOBALI
@@ -157,7 +158,7 @@ def generate_graphs_for_folder(folder_path):
     if not os.path.exists(folder_path):
         return graphs
     for file_name in os.listdir(folder_path):
-        if file_name.endswith(".json"):
+        if file_name.endswith(".json") and file_name not in {"docker_sbom.json", "cyclonedx-vuln-SBOM.json", "cyclonedx-license-SBOM.json", "discovered_files.json", "dependencies.json"}:
             file_path = os.path.join(folder_path, file_name)
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
@@ -480,7 +481,7 @@ async def upload_sbom(
                 
             found_files = []
            # Questi sono i pattern di file "standard" che consideriamo validi per l'analisi delle dipendenze 
-            valid_patterns = ["requirements.txt", "pyproject.toml", "setup.py", "*.lock"]
+            valid_patterns = ["requirements.txt", "pyproject.toml", "setup.py", "*.lock" , "dependencies.json"]
             
             for root, _, files in os.walk(tmp_clone):
                 for f in files:
@@ -849,9 +850,70 @@ def analyze_dependencies_sbom(
         "graphs": graph_results
     }
 
-# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-# IN CASO MODIFICARE QUESTA FUNZIONE PER AGGIUNGERE NUOVI TIPI DI FILE O FORMATI DI DIPENDENZE
-# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+# ============================================================
+# FUNZIONE DI SUPPORTO PER IL MERGE DEI FILE SBOM (USANDO IL TOOL CycloneDX CLI)
+# ============================================================
+
+def get_cyclonedx_path():
+    bin_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin")
+    os.makedirs(bin_dir, exist_ok=True)
+    bin_path = os.path.join(bin_dir, "cyclonedx-win-x64.exe")
+    
+    # Se il file manca, lo scarichiamo al volo
+    if not os.path.exists(bin_path):
+        print("[BACKEND] Tool non trovato. Download in corso...")
+        url = "https://github.com/CycloneDX/cyclonedx-cli/releases/latest/download/cyclonedx-win-x64.exe"
+        response = requests.get(url)
+        with open(bin_path, "wb") as f:
+            f.write(response.content)
+    return bin_path
+
+# ============================================================
+# MERGE DEI FILE SBOM TROVATI NELLE CARTELLE "manifests" e "dependencies" IN UN UNICO FILE SBOM FINALE
+# ============================================================
+
+@app.get("/merge-artifacts")
+def merge_artifacts():
+    # Recupera tutti i file JSON da "manifests" e "dependencies" per il merge
+    files_to_merge = glb.glob(os.path.join(STORAGE_DIR, "manifests", "*.json")) + \
+                     glb.glob(os.path.join(STORAGE_DIR, "dependencies", "*.json"))
+                     
+    if not files_to_merge:
+        raise HTTPException(status_code=400, detail="Nessun file SBOM trovato per il merge.")
+    
+    final_sbom = os.path.join(STORAGE_DIR, "final_merged_sbom.json")
+    cyclonedx_exe = get_cyclonedx_path()
+    
+    # Verifica che il binario esista davvero (per cyclonedx)
+    if not os.path.exists(cyclonedx_exe):
+        raise HTTPException(status_code=500, detail="Tool CycloneDX CLI non trovato. Esegui il setup del binario.")
+    
+    subprocess.run([cyclonedx_exe, "--version"], check=True)  # Controllo versione per debug
+    # Esegue il merge usando il percorso assoluto del binario
+    # Comando ufficiale: cyclonedx merge --input-files file1.json file2.json --output-file final_merged_sbom.json
+    merge_cmd = [cyclonedx_exe, "merge", "--input-files"] + files_to_merge + ["--output-file", final_sbom]
+    
+    try:
+        subprocess.run(merge_cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=500, detail=f"Errore durante il merge CycloneDX: {e}")
+    
+    with open(final_sbom, "r", encoding="utf-8") as f:
+        content = json.load(f) 
+    
+    return {"status": "success", "data": content, "merged_file": final_sbom}
+
+# ============================================================
+# GENERAZIONE GRAFI PER TUTTI I FILE TROVATI NELLA CARTELLA STORAGE (manifests e dependencies)
+# ============================================================
+
+@app.get("/generate-graphs")
+def generate_graphs():
+    graphs = {}
+    graphs.update(generate_graphs_for_folder(os.path.join(STORAGE_DIR, "manifests")))
+    graphs.update(generate_graphs_for_folder(os.path.join(STORAGE_DIR, "dependencies")))
+    graphs.update(generate_graphs_for_folder(STORAGE_DIR))  # Include anche eventuali file SBOM nella root
+    return {"status": "success", "graphs": graphs}
 
 # ============================================================
 # GENERAZIONE SBOM DOCKER REMOTA e ANALISI COMPARATIVA IMMEDIATA
@@ -919,7 +981,7 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
         #Restituisce: { purl: [ {file: 'nomefile.json', name: '...', version: '...'}, ... ] }
         global_map = {}
         target_dirs = [os.path.join(STORAGE_DIR, "manifests"), os.path.join(STORAGE_DIR, "dependencies")]
-        ignore_files = {"docker_sbom.json", "cyclonedx-vuln-SBOM.json", "cyclonedx-license-SBOM.json"}
+        ignore_files = {"docker_sbom.json", "cyclonedx-vuln-SBOM.json", "cyclonedx-license-SBOM.json", "discovered_files.json", "dependencies.json"}
         
         for folder in target_dirs:
             if os.path.exists(folder):
@@ -1000,7 +1062,7 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
                         break
         
         
-        if match_found:
+        if match_found: # se c'è una corrispondenza di PURL, aggiungiamo i dettagli
             dc["source_files"] = code_map.get(matched_purl, [])
             in_common.append(dc)
         else:
