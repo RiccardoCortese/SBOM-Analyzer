@@ -28,7 +28,7 @@ if "saved_branch" not in st.session_state:
 if "saved_format" not in st.session_state:
     st.session_state.saved_format = "entrambi"
 if "analysis_results" not in st.session_state:
-    st.session_state.analysis_results = None
+    st.session_state.analysis_results = {}
 if "merged_results" not in st.session_state:
     st.session_state.merged_results = None
 if "analysis_results_standard" not in st.session_state:
@@ -307,7 +307,7 @@ if "found_files" in st.session_state and st.session_state.found_files:
                     )
                     
                     if res.status_code == 200:
-                        st.session_state.analysis_results = res.json()
+                        st.session_state.analysis_results[i]= res.json()
                         st.success("Analisi immagine docker custom completata!")
                         st.rerun()
                         
@@ -318,7 +318,7 @@ if "found_files" in st.session_state and st.session_state.found_files:
                     st.error(f"Errore di connessione: {str(e)}")
                     
         if st.session_state.analysis_results is not None:
-            item = st.session_state.analysis_results["data"]
+            item = st.session_state.analysis_results[i]["data"]
 
             st.subheader(f"📦 Risultato per {item["filename"]}")
 
@@ -343,7 +343,7 @@ if "found_files" in st.session_state and st.session_state.found_files:
                 )
         st.markdown("---")
 
-st.subheader("Calcolo Grafi e merge artefatti")
+st.subheader("Calcolo Grafi e Merge Artefatti")
 col1, col2 = st.columns([1, 1])
 
 with col1:
@@ -613,6 +613,7 @@ with st.container():
     repo_graphs = st.session_state.get("deep_sbom_results", {}).get("graphs", {})
     docker_graphs = st.session_state.get("docker_results", {}).get("graphs", {})
     hierarchy_with_weights = st.session_state.get("docker_results", {}).get("hierarchy_with_weights", {})
+    hierarchy_with_weights_merged = {**st.session_state.get("graph_results", {}).get("hierarchy_with_weights", {}), **hierarchy_with_weights}
     
     normalized_docker_graphs = {}
     for purl, deps in docker_graphs.items():
@@ -665,7 +666,18 @@ with st.container():
         agraph(nodes=nodes, edges=edges, config=config)
 
         
-        if file_selezionato == "Docker_SBOM" and hierarchy_with_weights:
+        # ============================================================
+        # SEZIONE DI ANALISI DEL PESO DELLE DIPENDENZE
+        # ============================================================
+        
+        if file_selezionato == "Docker_SBOM" or file_selezionato == "final_merged_sbom.json":
+            if file_selezionato == "final_merged_sbom.json":
+                print("Usando i pesi uniti per il grafico finale")
+                hierarchy_with_weights = hierarchy_with_weights_merged
+            elif file_selezionato == "Docker_SBOM":
+                print("Usando i pesi Docker per il grafico Docker")
+                hierarchy_with_weights = hierarchy_with_weights
+            
             st.divider()
             st.subheader("📊 Analisi Impatto Dipendenze")
             
