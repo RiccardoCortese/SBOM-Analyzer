@@ -14,6 +14,9 @@ import stat
 from dockerfile_parse import DockerfileParser
 import fnmatch
 import glob as glb
+from docker_analysis.docker_step_analyzer import DockerStepAnalyzer
+from docker_analysis.docker_step_builder import DockerStepBuilder
+
 
 # ============================================================
 # CONFIGURAZIONE INIZIALE E VARIABILI GLOBALI
@@ -431,29 +434,64 @@ def remove_readonly(func, path, excinfo):
     func(path)
 
 # ===========================================================
-#  Funzione per il parsign del dockerfile
+#  Funzioni per il Dockerfile Parser e l'analisi dei RUN
 # ===========================================================
 
-def get_all_installs(dockerfile_content):
+# Funzione per estrarre tutte le immagini di base da un Dockerfile, per 
+def extract_base_images(dockerfile_content):
     parser = DockerfileParser()
     parser.content = dockerfile_content
 
-    run_commands = []
     images = []
 
     for inst in parser.structure:
         instruction = inst["instruction"].upper()
         value = inst["value"]
 
-        if instruction == "RUN":
-            run_commands.append(value)
-
-        elif instruction == "FROM":
+        if instruction == "FROM":
             if "ghcr.io/" in value or "docker.io/" in value or "quay.io/" in value or "registry.gitlab.com/" in value:
                 images.append(value)
 
+    return images
+
+# Funzione per analizzare un Dockerfile e restituire gli step RUN
+def get_docker_analysis(dockerfile_content,  build_context):
+
+    # Analisi del Dockerfile per estrarre gli step e le immagini di base
+    # Uno step è rappresentato da un'istruzione RUN, COPY, ADD, ecc. e viene costruito un Dockerfile progressivo per ogni step
+    analyzer = DockerStepAnalyzer(dockerfile_content)
+
+    steps = analyzer.parse()
+
+    # Estrazioni delle immagini dal FROM del docker
+    images = extract_base_images(dockerfile_content)
+
+    # Costruzione delle immagini intermedie per ogni step e salvataggio dei tag
+    builder = DockerStepBuilder(
+        build_context=build_context
+    )
+
+    try:
+
+        for step in steps:
+
+            image = builder.build(step)
+
+            print(
+                "Creata immagine:",
+                image
+            )
+
+            # salvo il riferimento nello step
+            step.image_tag = image
+
+
+    finally:
+
+        builder.cleanup()
+    
     return {
-        "run": run_commands,
+        "steps": steps,
         "images": images
     }
 # ============================================================
@@ -517,15 +555,14 @@ async def upload_sbom(
             with open(os.path.join(STORAGE_DIR, "discovered_files.json"), "w") as f:
                 json.dump(found_files, f)
             
-            result = get_all_installs(docker_content) if docker_content else {"run": [], "images": []}
+            result = get_docker_analysis(docker_content, tmp_clone) if docker_content else {"steps": [], "images": []}
 
-            install_commands = result["run"]
             images = result["images"]
 
             return {
                 "status": "success", 
                 "files": found_files, 
-                "install_commands": install_commands,
+                "steps": result["steps"],
                 "images": images
             }
             

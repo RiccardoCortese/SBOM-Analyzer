@@ -135,7 +135,7 @@ if st.button("🔄 Invia e Avvia Discovery"):
                 
                 if "files" in risposta:
                     st.session_state.found_files = risposta.get("files", [])
-                    st.session_state.install_commands = risposta.get("install_commands", [])
+                    st.session_state.steps = risposta.get("steps", [])
                     st.session_state.images = risposta.get("images", [])
                     st.info(f"Ho trovato {len(st.session_state.found_files)} file di dipendenze.")
                 st.rerun()
@@ -156,12 +156,12 @@ if "found_files" in st.session_state and st.session_state.found_files:
     for file_name in st.session_state.found_files:
         st.markdown(f"📄 **{file_name}**")
     
-    if "install_commands" in st.session_state and st.session_state.install_commands:
-        st.subheader("Comandi di installazione rilevati")
-        for cmd in st.session_state.install_commands:
-            st.code(f"RUN {cmd}", language="bash")
+    if "steps" in st.session_state and st.session_state.steps:
+        st.subheader("Passaggi Docker rilevati")
+        for step in st.session_state.steps:
+            st.code(f"{step}", language="docker")
     else:
-        st.info("Nessun comando di installazione rilevato.")
+        st.info("Nessun passaggio Docker rilevato.")
 
     if "images" in st.session_state and st.session_state.images:
         st.subheader("Immagini Docker rilevate")
@@ -317,7 +317,7 @@ if "found_files" in st.session_state and st.session_state.found_files:
                 except Exception as e:
                     st.error(f"Errore di connessione: {str(e)}")
                     
-        if st.session_state.analysis_results is not None:
+        if st.session_state.analysis_results is not None and i in st.session_state.analysis_results:
             item = st.session_state.analysis_results[i]["data"]
 
             st.subheader(f"📦 Risultato per {item["filename"]}")
