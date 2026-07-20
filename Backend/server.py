@@ -19,6 +19,7 @@ from utils.tools import get_cyclonedx_path
 from docker_analysis.docker_step_analyzer import DockerStepAnalyzer
 from docker_analysis.docker_step_builder import DockerStepBuilder
 from docker_analysis.docker_image_analyzer import DockerImageAnalyzer
+from docker_analysis.sbom_diff import compare_sbom
 
 
 # ============================================================
@@ -479,7 +480,9 @@ def get_docker_analysis(dockerfile_content,  build_context):
     image_analyzer = DockerImageAnalyzer(output_dir=os.path.join(STORAGE_DIR, "docker_sbom_steps"))
 
     try:
-
+        
+        sbom_paths = []
+        
         for step in steps:
 
             image = builder.build(step)
@@ -507,6 +510,8 @@ def get_docker_analysis(dockerfile_content,  build_context):
             # salvo riferimento nello step
             step.sbom_path = sbom_path
             
+            sbom_paths.append(sbom_path)
+            
              # Caricamento SBOM
             sbom = image_analyzer.load_sbom(
                 sbom_path
@@ -518,7 +523,27 @@ def get_docker_analysis(dockerfile_content,  build_context):
                 len(sbom.get("components", [])),
                 "componenti"
             )
+            
+            diffs = []
 
+
+            for i in range(1, len(sbom_paths)):
+
+                diff = compare_sbom(
+                    sbom_paths[i-1],
+                    sbom_paths[i]
+                )
+
+
+                diffs.append(
+                    {
+                        "from": i-1,
+                        "to": i,
+                        "diff": diff
+                    }
+    )
+
+        print (f"[DEBUG] Diffs: {diffs}", flush=True)
 
     finally:
 
@@ -526,7 +551,8 @@ def get_docker_analysis(dockerfile_content,  build_context):
     
     return {
         "steps": steps,
-        "images": images
+        "images": images,
+        "diffs": diffs
     }
 # ============================================================
 # ACQUISIZIONE E SALVATAGGIO IN MEMORIA SERVER di file JSON manuali o generati
