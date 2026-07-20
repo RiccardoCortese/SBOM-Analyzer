@@ -550,10 +550,19 @@ def get_docker_analysis(dockerfile_content,  build_context):
         builder.cleanup()
     
     return {
-        "steps": steps,
-        "images": images,
-        "diffs": diffs
-    }
+    "steps": [
+        {
+            "index": step.index,
+            "dockerfile_content": step.dockerfile_content,
+            "image_tag": step.image_tag,
+            "sbom_path": step.sbom_path
+        }
+        for step in steps
+    ],
+    "images": images,
+    "diffs": diffs
+}
+    
 # ============================================================
 # ACQUISIZIONE E SALVATAGGIO IN MEMORIA SERVER di file JSON manuali o generati
 # ============================================================
@@ -615,7 +624,7 @@ async def upload_sbom(
             with open(os.path.join(STORAGE_DIR, "discovered_files.json"), "w") as f:
                 json.dump(found_files, f)
             
-            result = get_docker_analysis(docker_content, tmp_clone) if docker_content else {"steps": [], "images": []}
+            result = get_docker_analysis(docker_content, tmp_clone) if docker_content else {"steps": [], "images": [], "diffs": []}
 
             images = result["images"]
 
@@ -623,7 +632,8 @@ async def upload_sbom(
                 "status": "success", 
                 "files": found_files, 
                 "steps": result["steps"],
-                "images": images
+                "images": images,
+                "diffs": result["diffs"]
             }
             
         finally:

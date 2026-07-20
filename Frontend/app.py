@@ -1,9 +1,12 @@
+from unittest import result
+
 import streamlit as st
 import requests
 import pandas as pd
 import json
 from streamlit_agraph import agraph, Node, Edge, Config
 import re
+from components.docker_parser_component import render_docker_sbom_analysis
 
 # ============================================================
 # CONFIGURAZIONE APP STREAMLIT
@@ -132,12 +135,13 @@ if st.button("🔄 Invia e Avvia Discovery"):
             if res.status_code == 200:
                 risposta = res.json()
                 st.success(f"Configurazione accettata: {risposta.get('message')}")
-                
-                if "files" in risposta:
-                    st.session_state.found_files = risposta.get("files", [])
-                    st.session_state.steps = risposta.get("steps", [])
-                    st.session_state.images = risposta.get("images", [])
-                    st.info(f"Ho trovato {len(st.session_state.found_files)} file di dipendenze.")
+            
+                st.session_state.found_files = risposta.get("files", [])
+                st.session_state.steps = risposta.get("steps", [])
+                st.session_state.images = risposta.get("images", [])
+                st.session_state.diffs = risposta.get("diffs", [])
+                st.session_state.analysis_done = True
+                st.info(f"Ho trovato {len(st.session_state.found_files)} file di dipendenze.")
                 st.rerun()
             else:
                 # Se il backend fallisce, mostriamo l'errore specifico
@@ -155,13 +159,6 @@ if "found_files" in st.session_state and st.session_state.found_files:
     # Visualizzazione dinamica
     for file_name in st.session_state.found_files:
         st.markdown(f"📄 **{file_name}**")
-    
-    if "steps" in st.session_state and st.session_state.steps:
-        st.subheader("Passaggi Docker rilevati")
-        for step in st.session_state.steps:
-            st.code(f"{step}", language="docker")
-    else:
-        st.info("Nessun passaggio Docker rilevato.")
 
     if "images" in st.session_state and st.session_state.images:
         st.subheader("Immagini Docker rilevate")
@@ -169,6 +166,15 @@ if "found_files" in st.session_state and st.session_state.found_files:
             st.code(f"FROM {img}", language="docker")
     else:
         st.info("Nessuna immagine Docker rilevata.")
+    st.markdown("---")
+    
+    if st.session_state.get("analysis_done", False):
+        st.subheader("📊 Risultati Analisi SBOM Docker")
+        render_docker_sbom_analysis(
+            st.session_state.steps,
+            st.session_state.diffs
+        )
+    
     st.markdown("---")
     
     # ===========================================================
