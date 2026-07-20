@@ -25,6 +25,8 @@ class DockerStep:
     # Indica se può modificare il contenuto dell'immagine
     filesystem_change: bool
 
+    # Percorso del file SBOM generato per questo step
+    sbom_path: str | None = None
 
 
 class DockerStepAnalyzer:
@@ -96,9 +98,7 @@ class DockerStepAnalyzer:
             )
 
 
-            command = self._normalize_command(
-                value
-            )
+            command = self._normalize_command(value)
 
 
             step = DockerStep(
@@ -146,22 +146,12 @@ class DockerStepAnalyzer:
         apt install git curl
         """
 
-        command = command.replace(
-            "\\\n",
-            " "
-        )
+        command = command.replace("\\\n"," ")
 
-        command = command.replace(
-            "\n",
-            " "
-        )
-
+        command = command.replace("\n"," ")
 
         # elimina spazi multipli
-        command = " ".join(
-            command.split()
-        )
-
+        command = " ".join(command.split())
 
         return command.strip()
 

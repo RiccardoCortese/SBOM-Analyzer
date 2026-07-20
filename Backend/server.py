@@ -14,8 +14,11 @@ import stat
 from dockerfile_parse import DockerfileParser
 import fnmatch
 import glob as glb
+
+from utils.tools import get_cyclonedx_path
 from docker_analysis.docker_step_analyzer import DockerStepAnalyzer
 from docker_analysis.docker_step_builder import DockerStepBuilder
+from docker_analysis.docker_image_analyzer import DockerImageAnalyzer
 
 
 # ============================================================
@@ -470,6 +473,10 @@ def get_docker_analysis(dockerfile_content,  build_context):
     builder = DockerStepBuilder(
         build_context=build_context
     )
+    
+    os.makedirs(os.path.join(STORAGE_DIR, "docker_sbom_steps"), exist_ok=True)
+    # Creazione di un'istanza di DockerImageAnalyzer per generare SBOM per ogni immagine intermedia
+    image_analyzer = DockerImageAnalyzer(output_dir=os.path.join(STORAGE_DIR, "docker_sbom_steps"))
 
     try:
 
@@ -484,6 +491,33 @@ def get_docker_analysis(dockerfile_content,  build_context):
 
             # salvo il riferimento nello step
             step.image_tag = image
+            
+            # genera SBOM
+            sbom_path = image_analyzer.generate_sbom(
+                image,
+                step.index
+            )
+
+
+            print(
+                f"SBOM generato: {sbom_path}"
+            )
+
+
+            # salvo riferimento nello step
+            step.sbom_path = sbom_path
+            
+             # Caricamento SBOM
+            sbom = image_analyzer.load_sbom(
+                sbom_path
+            )
+
+
+            print(
+                f"Step {step.index}:",
+                len(sbom.get("components", [])),
+                "componenti"
+            )
 
 
     finally:
@@ -772,24 +806,6 @@ def analyze_custom_file(
         "data": data,
         "graphs": graph_results
     }
-
-# ============================================================
-# FUNZIONE DI SUPPORTO PER IL MERGE DEI FILE SBOM (USANDO IL TOOL CycloneDX CLI)
-# ============================================================
-
-def get_cyclonedx_path():
-    bin_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin")
-    os.makedirs(bin_dir, exist_ok=True)
-    bin_path = os.path.join(bin_dir, "cyclonedx-win-x64.exe")
-    
-    # Se il file manca, lo scarichiamo al volo
-    if not os.path.exists(bin_path):
-        print("[BACKEND] Tool non trovato. Download in corso...")
-        url = "https://github.com/CycloneDX/cyclonedx-cli/releases/latest/download/cyclonedx-win-x64.exe"
-        response = requests.get(url)
-        with open(bin_path, "wb") as f:
-            f.write(response.content)
-    return bin_path
 
 # ============================================================
 # MERGE DEI FILE SBOM TROVATI NELLE CARTELLE "manifests" e "dependencies" IN UN UNICO FILE SBOM FINALE

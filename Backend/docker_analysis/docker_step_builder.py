@@ -16,12 +16,40 @@ class DockerStepBuilder:
 
     def __init__(self, build_context=None):
         self.build_context = build_context
+        
+        # Normalizza i file di script nella build context per evitare problemi di fine linea
+        if self.build_context:
+            self.normalize_line_endings(
+            self.build_context
+        )
+        
         # cartella temporanea dove creare i Dockerfile
         self.temp_dir = tempfile.mkdtemp(
             prefix="docker_step_builder_"
         )
 
 
+    # normalizzazione dei file di script (bash, sh, py) per evitare problemi di fine linea
+    def normalize_line_endings(self, path):
+        for root, _, files in os.walk(path):
+            for file in files:
+                if file.endswith((".py", ".sh", ".bash")):
+                    file_path = os.path.join(root, file)
+
+                    try:
+                        with open(file_path, "rb") as f:
+                            content = f.read()
+
+                        content = content.replace(
+                            b"\r\n",
+                            b"\n"
+                        )
+
+                        with open(file_path, "wb") as f:
+                            f.write(content)
+
+                    except Exception:
+                        pass
 
     def build(self, step: DockerStep) -> str:
         """
@@ -50,15 +78,8 @@ class DockerStepBuilder:
 
 
         # Scrittura Dockerfile temporaneo
-        with open(
-            dockerfile_path,
-            "w",
-            encoding="utf-8"
-        ) as f:
-
-            f.write(
-                step.dockerfile_content
-            )
+        with open( dockerfile_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write( step.dockerfile_content.replace("\r\n", "\n") )
 
 
         image_tag = step.image_tag
@@ -106,13 +127,9 @@ class DockerStepBuilder:
 
         except subprocess.CalledProcessError as e:
 
-            print(
-                "Errore build Docker:"
-            )
+            print("Errore build Docker:")
 
-            print(
-                e.stderr
-            )
+            print(e.stderr)
 
             raise
 
