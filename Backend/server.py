@@ -15,14 +15,20 @@ from dockerfile_parse import DockerfileParser
 import fnmatch
 import glob as glb
 
+from utils.tools import get_cyclonedx_path
+from docker_analysis.docker_step_analyzer import DockerStepAnalyzer
+from docker_analysis.docker_step_builder import DockerStepBuilder
+from docker_analysis.docker_image_analyzer import DockerImageAnalyzer
+
+
 # ============================================================
 # CONFIGURAZIONE INIZIALE E VARIABILI GLOBALI
 # ============================================================
 load_dotenv()
 
-app = FastAPI(title="TLSAssistant Dependency Analyzer Backend")
+app = FastAPI(title="SBOM Analyzer Backend")
 
-STORAGE_DIR = os.path.join(tempfile.gettempdir(), "tlsassistant_storage")
+STORAGE_DIR = os.path.join(tempfile.gettempdir(), "sbom_analyzer_storage")
 os.makedirs(STORAGE_DIR, exist_ok=True)
 
 GITHUB_API = "https://api.github.com/repos"
@@ -271,7 +277,11 @@ def build_universal_hierarchy(name_sbom_file_docker: str, folder_path: str):
 def get_dependency_weight(purl, hierarchy, memo=None, visited_global=None):
     if memo is None: memo = {} # memo è un dizionario per memorizzare i risultati già calcolati
     if purl in memo: return memo[purl] # Se il peso è già stato calcolato, ritorna il valore memorizzato
-    if visited_global is None: visited_global = set() # Inizializza il set globale per tracciare le dipendenze visitate per vedere le overlapped
+    
+    # Protezione dai cicli
+    if visited_global is None: visited_global = set()
+    if purl in visited_global: return 0, set(), 0
+    visited_global.add(purl)
     
     count_total = 0 # totale delle dipendenze (dirette e indirette)
     unique_nodes = set() # insieme dei nodi unici visitati per calcolare l'overlap
@@ -294,8 +304,11 @@ def get_dependency_weight(purl, hierarchy, memo=None, visited_global=None):
     
     # Memorizziamo sia il totale che l'insieme dei nodi univoci
     memo[purl] = (count_total, unique_nodes, overlap)
+    
+    # Backtracking: rimuoviamo dal set dei nodi visitati nel path corrente
+    visited_global.remove(purl)
+    
     return count_total, unique_nodes, overlap
-
 # ============================================================
 # LOGICA DI POLLING E SCARICAMENTO ARTIFACT
 # ============================================================
@@ -360,7 +373,7 @@ def wait_and_download_artifacts(run_id: int, dest_dir: str):
                 file_path = os.path.join(dest_dir, file_name)
                 
                 # Smista in base al nome
-                if "requirements" in file_name or "poetry" in file_name:
+                if file_name == "trivy_poetry.json" or file_name == "trivy_requirements.json" or file_name == "trivy_uv.json":
                     shutil.move(file_path, os.path.join(manifests_dir, file_name))
                 elif file_name != "docker_sbom.json" and file_name != "cyclonedx-license-SBOM.json" and file_name != "cyclonedx-vuln-SBOM.json":
                     shutil.move(file_path, os.path.join(deps_dir, file_name))
@@ -376,9 +389,9 @@ def wait_and_download_artifacts(run_id: int, dest_dir: str):
 # ============================================================
 
 def trigger_github_action(workflow_file: str, inputs: dict) -> Optional[dict]:
-    """Innesca una pipeline remota specifica e restituisce un dizionario con URL e Run ID."""
     headers = github_headers()
     if not headers:
+        print("[ERROR] GITHUB_TOKEN non trovato nelle variabili d'ambiente.")
         return None
 
     # URL dinamico basato sul file .yml passato come argomento
@@ -421,32 +434,97 @@ def remove_readonly(func, path, excinfo):
     func(path)
 
 # ===========================================================
-#  Funzione per il parsign del dockerfile
+#  Funzioni per il Dockerfile Parser e l'analisi dei RUN
 # ===========================================================
 
-def get_all_installs(dockerfile_content):
+# Funzione per estrarre tutte le immagini di base da un Dockerfile, per 
+def extract_base_images(dockerfile_content):
     parser = DockerfileParser()
     parser.content = dockerfile_content
 
-    run_commands = []
     images = []
 
     for inst in parser.structure:
         instruction = inst["instruction"].upper()
         value = inst["value"]
 
-        if instruction == "RUN":
-            run_commands.append(value)
-
-        elif instruction == "FROM":
+        if instruction == "FROM":
             if "ghcr.io/" in value or "docker.io/" in value or "quay.io/" in value or "registry.gitlab.com/" in value:
                 images.append(value)
 
+    return images
+
+# Funzione per analizzare un Dockerfile e restituire gli step RUN
+def get_docker_analysis(dockerfile_content,  build_context):
+
+    # Analisi del Dockerfile per estrarre gli step e le immagini di base
+    # Uno step è rappresentato da un'istruzione RUN, COPY, ADD, ecc. e viene costruito un Dockerfile progressivo per ogni step
+    analyzer = DockerStepAnalyzer(dockerfile_content)
+
+    steps = analyzer.parse()
+
+    # Estrazioni delle immagini dal FROM del docker
+    images = extract_base_images(dockerfile_content)
+
+    # Costruzione delle immagini intermedie per ogni step e salvataggio dei tag
+    builder = DockerStepBuilder(
+        build_context=build_context
+    )
+    
+    os.makedirs(os.path.join(STORAGE_DIR, "docker_sbom_steps"), exist_ok=True)
+    # Creazione di un'istanza di DockerImageAnalyzer per generare SBOM per ogni immagine intermedia
+    image_analyzer = DockerImageAnalyzer(output_dir=os.path.join(STORAGE_DIR, "docker_sbom_steps"))
+
+    try:
+
+        for step in steps:
+
+            image = builder.build(step)
+
+            print(
+                "Creata immagine:",
+                image
+            )
+
+            # salvo il riferimento nello step
+            step.image_tag = image
+            
+            # genera SBOM
+            sbom_path = image_analyzer.generate_sbom(
+                image,
+                step.index
+            )
+
+
+            print(
+                f"SBOM generato: {sbom_path}"
+            )
+
+
+            # salvo riferimento nello step
+            step.sbom_path = sbom_path
+            
+             # Caricamento SBOM
+            sbom = image_analyzer.load_sbom(
+                sbom_path
+            )
+
+
+            print(
+                f"Step {step.index}:",
+                len(sbom.get("components", [])),
+                "componenti"
+            )
+
+
+    finally:
+
+        builder.cleanup()
+    
     return {
-        "run": run_commands,
+        "steps": steps,
         "images": images
     }
-
 # ============================================================
 # ACQUISIZIONE E SALVATAGGIO IN MEMORIA SERVER di file JSON manuali o generati
 # ============================================================
@@ -494,6 +572,7 @@ async def upload_sbom(
                         )
                         found_files.append(dest_name)
             
+                        
             # Cerco il Dockerfile per estrarre i comandi di installazione e le immagini di base, prendendo il path da dockerfile_path
             docker_content = None
             if dockerfile_path:
@@ -508,22 +587,20 @@ async def upload_sbom(
             with open(os.path.join(STORAGE_DIR, "discovered_files.json"), "w") as f:
                 json.dump(found_files, f)
             
-            result = get_all_installs(docker_content) if docker_content else {"run": [], "images": []}
+            result = get_docker_analysis(docker_content, tmp_clone) if docker_content else {"steps": [], "images": []}
 
-            install_commands = result["run"]
             images = result["images"]
 
             return {
                 "status": "success", 
                 "files": found_files, 
-                "install_commands": install_commands,
+                "steps": result["steps"],
                 "images": images
             }
             
         finally:
             shutil.rmtree(tmp_clone, onerror=remove_readonly)
-
-            
+                
     # Se l'azione è "upload", salviamo tutti i file manuali caricati (requirements, poetry, docker) per l'analisi comparativa
     if action == "upload":
         if not requirements_file and not poetry_file and not docker_file:
@@ -585,14 +662,17 @@ async def analyze_standard_file(
     # Logica per gestire "Entrambi"
     files_da_analizzare = []
     if format == "Entrambi":
-        files_da_analizzare = ["requirements", "poetry"] # Aggiungi quelli che vuoi
+        files_da_analizzare = ["requirements", "poetry"]
     else:
-        if format not in ["requirements", "poetry", "pyproject.toml", "poetry.lock", "requirements.txt"]:
+        if format not in ["requirements", "poetry", "pyproject.toml", "poetry.lock", "requirements.txt", "uv.lock"]:
+            print("A")
             raise HTTPException(status_code=400, detail="Formato non supportato per l'analisi standard.")
         elif format == "requirements.txt":
             files_da_analizzare = ["requirements"]
         elif format == "pyproject.toml" or format == "poetry.lock":
             files_da_analizzare = ["poetry"]
+        elif format == "uv.lock":
+            files_da_analizzare = ["uv"]
 
     results = []
     
@@ -613,6 +693,7 @@ async def analyze_standard_file(
 # ============================================================
 
 def run_standard_sbom_action(repo_url, branch, format):
+    print(f"[DEBUG] Avvio analisi per {format} su {repo_url} (branch: {branch})", flush=True)
     
     match = re.search(r"github\.com/([^/]+)/([^/?#]+)", repo_url)
     owner_repo = f"{match.group(1)}/{match.group(2).replace('.git', '')}" if match else repo_url
@@ -635,10 +716,12 @@ def run_standard_sbom_action(repo_url, branch, format):
     mapping = {
         "requirements": "trivy_requirements.json",
         "poetry": "trivy_poetry.json",
-        "pyproject": "trivy_pyproject.json"
+        "pyproject": "trivy_pyproject.json",
+        "uv": "trivy_uv.json"
     }
 
     if format not in mapping:
+        print("B")
         raise HTTPException(status_code=400, detail="File di dipendenze non supportato")
         
     target_file = os.path.join(STORAGE_DIR, "manifests", mapping[format])
@@ -656,6 +739,13 @@ def run_standard_sbom_action(repo_url, branch, format):
         "github_run_url": action_info["html_url"],
         "content": content
     }
+
+# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+# IN CASO MODIFICARE QUESTA FUNZIONE PER AGGIUNGERE NUOVI TIPI DI FILE O FORMATI DI DIPENDENZE
+# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+# ============================================================
+# ANALISI COMPONENTI DEPENDENCIES.JSON IN PARALLELO (con github action remota) e generazione SBOM per singole dipendenze
+# ============================================================
 
 # ============================================================
 # ANALISI AVANZATA (Solo per dependencies.json)
@@ -851,24 +941,6 @@ def analyze_dependencies_sbom(
     }
 
 # ============================================================
-# FUNZIONE DI SUPPORTO PER IL MERGE DEI FILE SBOM (USANDO IL TOOL CycloneDX CLI)
-# ============================================================
-
-def get_cyclonedx_path():
-    bin_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin")
-    os.makedirs(bin_dir, exist_ok=True)
-    bin_path = os.path.join(bin_dir, "cyclonedx-win-x64.exe")
-    
-    # Se il file manca, lo scarichiamo al volo
-    if not os.path.exists(bin_path):
-        print("[BACKEND] Tool non trovato. Download in corso...")
-        url = "https://github.com/CycloneDX/cyclonedx-cli/releases/latest/download/cyclonedx-win-x64.exe"
-        response = requests.get(url)
-        with open(bin_path, "wb") as f:
-            f.write(response.content)
-    return bin_path
-
-# ============================================================
 # MERGE DEI FILE SBOM TROVATI NELLE CARTELLE "manifests" e "dependencies" IN UN UNICO FILE SBOM FINALE
 # ============================================================
 
@@ -902,7 +974,6 @@ def merge_artifacts():
         content = json.load(f) 
     
     return {"status": "success", "data": content, "merged_file": final_sbom}
-
 # ============================================================
 # GENERAZIONE GRAFI PER TUTTI I FILE TROVATI NELLA CARTELLA STORAGE (manifests e dependencies)
 # ============================================================
@@ -933,7 +1004,10 @@ def generate_graphs():
 # ============================================================
 
 @app.post("/generate-docker-sbom")
-def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
+def generate_docker_sbom(
+    docker_target: str, 
+    vuln_type: str = "os,library"
+):
     
     os.makedirs(os.path.join(STORAGE_DIR, "manifests"), exist_ok=True)
     os.makedirs(os.path.join(STORAGE_DIR, "dependencies"), exist_ok=True)
@@ -1001,18 +1075,21 @@ def generate_docker_sbom(docker_target: str, vuln_type: str = "os,library"):
                 for root, _, files in os.walk(folder):
                     for file_name in files:
                         if file_name.endswith(".json") and file_name not in ignore_files:
-                            with open(os.path.join(root, file_name), "r", encoding="utf-8") as f:
-                                data = json.load(f)
-                                items = data.get("components", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
-                                for c in items:
-                                    if isinstance(c, dict) and c.get("purl"):
-                                        purl = str(c["purl"]).lower().strip()
-                                        if purl not in global_map: global_map[purl] = []
-                                        global_map[purl].append({
-                                            "source": file_name,
-                                            "name": c.get("name"),
-                                            "version": c.get("version")
-                                        })
+                            if "vuln" in file_name or "license" in file_name:
+                                continue  # Ignora file di vulnerabilità e licenze
+                            else:
+                                with open(os.path.join(root, file_name), "r", encoding="utf-8") as f:
+                                    data = json.load(f)
+                                    items = data.get("components", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+                                    for c in items:
+                                        if isinstance(c, dict) and c.get("purl"):
+                                            purl = str(c["purl"]).lower().strip()
+                                            if purl not in global_map: global_map[purl] = []
+                                            global_map[purl].append({
+                                                "source": file_name,
+                                                "name": c.get("name"),
+                                                "version": c.get("version")
+                                            })
         return global_map
     
     # Recuperiamo la mappa globale dei componenti del codice per il confronto con lo SBOM Docker
