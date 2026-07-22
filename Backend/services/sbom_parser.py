@@ -287,7 +287,7 @@ def extract_base_images(dockerfile_content):
 
     return images
 
-# Funzione per analizzare un Dockerfile e restituire gli step RUN
+# Funzione per analizzare un Dockerfile e restituire gli step
 def get_docker_analysis(dockerfile_content,  build_context):
 
     # Analisi del Dockerfile per estrarre gli step e le immagini di base
@@ -316,61 +316,42 @@ def get_docker_analysis(dockerfile_content,  build_context):
 
             image = builder.build(step)
 
-            print(
-                "Creata immagine:",
-                image
-            )
+            print( "Creata immagine:", image )
 
             # salvo il riferimento nello step
             step.image_tag = image
             
             # genera SBOM
-            sbom_path = image_analyzer.generate_sbom(
-                image,
-                step.index
-            )
+            sbom_path = image_analyzer.generate_sbom( image, step.index)
 
-
-            print(
-                f"SBOM generato: {sbom_path}"
-            )
-
+            print(f"SBOM generato: {sbom_path}")
 
             # salvo riferimento nello step
             step.sbom_path = sbom_path
             
             sbom_paths.append(sbom_path)
             
-             # Caricamento SBOM
-            sbom = image_analyzer.load_sbom(
-                sbom_path
-            )
+            # Caricamento SBOM
+            sbom = image_analyzer.load_sbom(sbom_path)
 
-
-            print(
-                f"Step {step.index}:",
-                len(sbom.get("components", [])),
-                "componenti"
-            )
+            unique_components = {comp.get("name") for comp in sbom.get("components", []) if comp.get("name")}
+        
+            step.total_components = len(unique_components)
+            print(f"Step {step.index}:", step.total_components, "componenti unici")
             
-            diffs = []
+        diffs = []
+
+        for i in range(1, len(sbom_paths)):
+
+            diff = compare_sbom( sbom_paths[i-1], sbom_paths[i]) # compara SBOM tra step i-1 e i
 
 
-            for i in range(1, len(sbom_paths)):
-
-                diff = compare_sbom(
-                    sbom_paths[i-1],
-                    sbom_paths[i]
-                )
-
-
-                diffs.append(
-                    {
-                        "from": i-1,
-                        "to": i,
-                        "diff": diff
-                    }
-    )
+            diffs.append({
+                    "from": i-1,
+                    "to": i,
+                    "diff": diff
+                }
+            )
 
     finally:
 
@@ -382,7 +363,8 @@ def get_docker_analysis(dockerfile_content,  build_context):
             "index": step.index,
             "dockerfile_content": step.dockerfile_content,
             "image_tag": step.image_tag,
-            "sbom_path": step.sbom_path
+            "sbom_path": step.sbom_path,
+            "total_components": step.total_components
         }
         for step in steps
     ],

@@ -318,7 +318,8 @@ def analyze_custom_file(
 def merge_artifacts():
     # Recupera tutti i file JSON da "manifests" e "dependencies" per il merge
     files_to_merge = glb.glob(os.path.join(STORAGE_DIR, "manifests", "*.json")) + \
-                     glb.glob(os.path.join(STORAGE_DIR, "dependencies", "*.json"))
+                     glb.glob(os.path.join(STORAGE_DIR, "dependencies", "*.json")) + \
+                     glb.glob(os.path.join(STORAGE_DIR, "docker_sbom_steps", "*.json"))
                      
     if not files_to_merge:
         raise HTTPException(status_code=400, detail="Nessun file SBOM trovato per il merge.")
@@ -353,6 +354,7 @@ def generate_graphs():
     graphs = {}
     graphs.update(generate_graphs_for_folder(os.path.join(STORAGE_DIR, "manifests")))
     graphs.update(generate_graphs_for_folder(os.path.join(STORAGE_DIR, "dependencies")))
+    graphs.update(generate_graphs_for_folder(os.path.join(STORAGE_DIR, "docker_sbom_steps")))
     graphs.update(generate_graphs_for_folder(STORAGE_DIR))  # Include anche eventuali file SBOM nella root
     memo = {}
     hierarchy_with_weights_merged = {}
@@ -436,7 +438,7 @@ def generate_docker_sbom(
     def get_global_code_map():
         #Restituisce: { purl: [ {file: 'nomefile.json', name: '...', version: '...'}, ... ] }
         global_map = {}
-        target_dirs = [os.path.join(STORAGE_DIR, "manifests"), os.path.join(STORAGE_DIR, "dependencies")]
+        target_dirs = [os.path.join(STORAGE_DIR, "manifests"), os.path.join(STORAGE_DIR, "dependencies"), os.path.join(STORAGE_DIR, "docker_sbom_steps")]
         ignore_files = {"docker_sbom.json", "cyclonedx-vuln-SBOM.json", "cyclonedx-license-SBOM.json"}
         
         for folder in target_dirs:

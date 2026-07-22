@@ -26,7 +26,6 @@ def load_components(sbom_path: str) -> dict:
 
 
     for component in sbom.get("components", []):
-
         name = component.get("name")
 
         if not name:
@@ -67,7 +66,6 @@ def compare_sbom(
     added = []
     removed = []
     changed = []
-
 
     # nuovi componenti
     for name, info in new_components.items():
@@ -111,8 +109,7 @@ def compare_sbom(
                     **info
                 }
             )
-
-
+    
     return {
 
         "added": added,
