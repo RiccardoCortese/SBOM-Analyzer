@@ -2,7 +2,7 @@ import streamlit as st
 import plotly.graph_objects as go
 
 
-def render_docker_sbom_analysis(steps, diffs):
+def render_docker_sbom_analysis(steps, diffs, artifacts):
 
     st.subheader("Docker SBOM Evolution")
 
@@ -43,7 +43,7 @@ def render_docker_sbom_analysis(steps, diffs):
         for step in steps:
             with st.expander(f"Step {step['index']}", expanded=False):
                 
-                col1, col2 = st.columns([1, 5])
+                col1, col2, col3 = st.columns([0.5, 5,1])
 
                 with col1:
                     st.markdown(f"### STEP {step['index']}")
@@ -54,6 +54,20 @@ def render_docker_sbom_analysis(steps, diffs):
                         language="dockerfile"
                     )
 
+                with col3:
+                    st.markdown(f"#### ⚠️ Possibili Artefatti")
+                    for artifact in artifacts:
+                        if artifact["step_index"] == step["index"]:
+                            st.write(f"**{artifact['artifact_type'].replace('_', ' ').title()}**")
+                            st.write(f"Source: {artifact['source']}")
+                            st.write(f"Destination: {artifact['destination']}")
+                            st.write(f"Reason: {artifact['reason']}")
+                            st.write(f"Source Type: {artifact['source_type']}")
+                            artefatto = True
+                            st.divider()
+                    if not any(artifact["step_index"] == step["index"] for artifact in artifacts):
+                        st.write("Nessun artefatto rilevato in questo step.")
+                    
                 st.divider()
 
     # -------------------------

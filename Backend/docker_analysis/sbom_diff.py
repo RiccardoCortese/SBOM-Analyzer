@@ -27,15 +27,26 @@ def load_components(sbom_path: str) -> dict:
 
     for component in sbom.get("components", []):
         name = component.get("name")
+        
+        key = (
+            component.get("purl") or component.get("bom-ref") 
+        )
 
         if not name:
             continue
 
 
-        components[name] = {
+        components[key] = {
+            "name": component.get("name"),
             "version": component.get("version"),
             "type": component.get("type")
         }
+        
+        #components[name] = {
+        #    "version": component.get("version"),
+        #    "type": component.get("type")
+        #}
+        
 
 
     return components

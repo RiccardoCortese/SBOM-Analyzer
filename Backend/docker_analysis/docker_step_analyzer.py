@@ -69,7 +69,11 @@ class DockerStepAnalyzer:
             "WORKDIR",
             "USER",
             "ENTRYPOINT",
-            "CMD"
+            "CMD",
+            "LABEL",
+            "EXPOSE",
+            "VOLUME",
+            "HEALTHCHECK"
         }
 
 
@@ -85,8 +89,8 @@ class DockerStepAnalyzer:
 
 
             # Ignora istruzioni non interessanti
-            if instruction not in tracked_instructions:
-                continue
+            #if instruction not in tracked_instructions:
+            #    continue
 
 
             # Ricostruzione Dockerfile progressivo

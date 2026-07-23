@@ -24,7 +24,8 @@ def render_standard_analysis(backend_url: str):
         st.subheader("📊 Risultati Analisi SBOM Docker")
         render_docker_sbom_analysis(
             st.session_state.steps,
-            st.session_state.diffs
+            st.session_state.diffs,
+            st.session_state.artifacts
         )
     
     st.markdown("---")

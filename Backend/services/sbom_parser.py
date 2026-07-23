@@ -6,6 +6,7 @@ from docker_analysis.docker_step_analyzer import DockerStepAnalyzer
 from docker_analysis.docker_step_builder import DockerStepBuilder
 from docker_analysis.docker_image_analyzer import DockerImageAnalyzer
 from docker_analysis.sbom_diff import compare_sbom
+from docker_analysis.docker_artifact_detector import DockerArtifactDetector
 from config import STORAGE_DIR
 
 # ============================================================
@@ -295,7 +296,14 @@ def get_docker_analysis(dockerfile_content,  build_context):
     analyzer = DockerStepAnalyzer(dockerfile_content)
 
     steps = analyzer.parse()
-
+    
+    # Analisi dei RUN per estrarre i candidati a artefatti (file copiati, pacchetti installati, ecc.), per possibili vulnerabilità
+    artifact_detector = DockerArtifactDetector()
+    
+    artifacts = artifact_detector.analyze(steps)
+    print (f"Artefatti rilevati: {len(artifacts)}")
+    print (f"Artefatti: {artifacts}")
+    
     # Estrazioni delle immagini dal FROM del docker
     images = extract_base_images(dockerfile_content)
 
@@ -343,7 +351,7 @@ def get_docker_analysis(dockerfile_content,  build_context):
 
         for i in range(1, len(sbom_paths)):
 
-            diff = compare_sbom( sbom_paths[i-1], sbom_paths[i]) # compara SBOM tra step i-1 e i
+            diff = compare_sbom(sbom_paths[i-1], sbom_paths[i]) # compara SBOM tra step i-1 e i
 
 
             diffs.append({
@@ -369,6 +377,17 @@ def get_docker_analysis(dockerfile_content,  build_context):
         for step in steps
     ],
     "images": images,
-    "diffs": diffs
+    "diffs": diffs,
+    "artifacts": [
+        {
+            "step_index": artifact.step_index,
+            "artifact_type": artifact.artifact_type,
+            "source": artifact.source,
+            "destination": artifact.destination,
+            "reason": artifact.reason,
+            "source_type": artifact.source_type
+        }
+        for artifact in artifacts
+    ]
 }
     

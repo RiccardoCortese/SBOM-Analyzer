@@ -97,6 +97,7 @@ def render_config_target(backend_url: str):
                     st.session_state.steps = risposta.get("steps", [])
                     st.session_state.images = risposta.get("images", [])
                     st.session_state.diffs = risposta.get("diffs", [])
+                    st.session_state.artifacts = risposta.get("artifacts", [])
                     st.session_state.analysis_done = True
                     st.info(f"Ho trovato {len(st.session_state.found_files)} file di dipendenze.")
                     st.rerun()
