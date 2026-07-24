@@ -39,9 +39,10 @@ def render_docker_sbom_analysis(steps, diffs, artifacts):
     # -------------------------
 
     with st.expander("📌 Dockerfile Timeline" ):
-    
+        st.info("Espandi per vedere il contenuto di ogni step del Dockerfile e i possibili artefatti rilevati.")
+        st.info("Il simbolo ⚠️ indica che in quello step sono stati rilevati possibili artefatti.")
         for step in steps:
-            with st.expander(f"Step {step['index']}", expanded=False):
+            with st.expander(f"Step {step['index']}" + (" ⚠️" if any(artifact["step_index"] == step["index"] for artifact in artifacts) else ""), expanded=False):
                 
                 col1, col2, col3 = st.columns([0.5, 5,1])
 
@@ -66,7 +67,7 @@ def render_docker_sbom_analysis(steps, diffs, artifacts):
                             artefatto = True
                             st.divider()
                     if not any(artifact["step_index"] == step["index"] for artifact in artifacts):
-                        st.write("Nessun artefatto rilevato in questo step.")
+                        st.write("✅ Nessun artefatto rilevato in questo step.")
                     
                 st.divider()
 

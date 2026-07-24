@@ -342,7 +342,7 @@ def get_docker_analysis(dockerfile_content,  build_context):
             # Caricamento SBOM
             sbom = image_analyzer.load_sbom(sbom_path)
 
-            unique_components = {comp.get("name") for comp in sbom.get("components", []) if comp.get("name")}
+            unique_components = {comp.get("purl") for comp in sbom.get("components", []) if comp.get("purl")}
         
             step.total_components = len(unique_components)
             print(f"Step {step.index}:", step.total_components, "componenti unici")

@@ -1,7 +1,6 @@
 # Server per ricercare possibili artifacts malevoli in un'immagine Docker
 
 from dataclasses import dataclass
-import re
 import json
 import shlex
 from docker_analysis.docker_step_analyzer import DockerStep
@@ -99,48 +98,38 @@ class DockerArtifactDetector:
         ]
 
     def _analyze_copy( self, step: DockerStep) -> list[DockerArtifactCandidate]:
-
         command = step.command.strip()
-
         artifacts = []
 
+        #
+        # Determina il tipo di sorgente
+        #
         source_type = "local"
+        reason = "COPY introduce file esterno"
 
-        # Gestione COPY --from=stage
-        if command.startswith("--from="):
-
+        if "--from=" in command:
             source_type = "stage"
+            reason = "COPY da uno stage precedente"
 
-            parts = command.split()
-
-            parts = [
-                p for p in parts
-                if not p.startswith("--")
-            ]
-
-            if len(parts) >= 2:
-
-                artifacts.append(
-                    DockerArtifactCandidate(
-                        step_index=step.index,
-                        artifact_type="copied_file",
-                        source=parts[0],
-                        destination=parts[-1],
-                        source_type=source_type,
-                        reason="COPY from previous build stage"
-                    )
-                )
-                
-            return artifacts
-
-        # Gestione COPY JSON:
         #
-        # COPY ["a", "b", "dest"]
+        # ======================================================
+        # COPY JSON
         #
-        if command.startswith("["):
+        # COPY ["a", "b", "/dest"]
+        # COPY --chown=... ["a", "b", "/dest"]
+        # COPY --from=builder ["a", "/dest"]
+        # ======================================================
+        #
+        start = command.find("[")
+        end = command.rfind("]")
+
+        if start != -1 and end != -1:
 
             try:
-                args = json.loads(command)
+
+                args = json.loads(command[start:end + 1])
+
+                destination = args[-1]
 
                 for src in args[:-1]:
 
@@ -149,45 +138,59 @@ class DockerArtifactDetector:
                             step_index=step.index,
                             artifact_type="copied_file",
                             source=src,
-                            destination=args[-1],
-                            source_type="local",
-                            reason="COPY introduces external file"
+                            destination=destination,
+                            source_type=source_type,
+                            reason=reason
                         )
                     )
 
                 return artifacts
 
-            except Exception:
+            except json.JSONDecodeError:
                 pass
 
-        # COPY normale
-        parts = command.split()
+        #
+        # ======================================================
+        # COPY classico
+        #
+        # COPY src dest
+        # COPY src1 src2 dest
+        # COPY --chown=... src dest
+        # COPY --from=builder src dest
+        # ======================================================
+        #
 
-        # rimuove opzioni tipo:
-        # --chown=1000:1000
-        filtered_parts = [
+        parts = shlex.split(command)
+
+        # rimuove tutte le opzioni (--chown, --from, ...)
+        parts = [
             p for p in parts
             if not p.startswith("--")
         ]
 
-        if len(filtered_parts) < 2:
+        if len(parts) < 2:
             return []
 
-        return [
-            DockerArtifactCandidate(
-                step_index=step.index,
-                artifact_type="copied_file",
-                source=filtered_parts[0],
-                destination=filtered_parts[-1],
-                source_type="local",
-                reason="COPY introduces external file"
-            )
-        ]
+        destination = parts[-1]
 
-    def _analyze_run(
-        self,
-        step: DockerStep
-    ) -> list[DockerArtifactCandidate]:
+        sources = parts[:-1]
+
+        for src in sources:
+
+            artifacts.append(
+                DockerArtifactCandidate(
+                    step_index=step.index,
+                    artifact_type="copied_file",
+                    source=src,
+                    destination=destination,
+                    source_type=source_type,
+                    reason=reason
+                )
+            )
+
+        return artifacts
+
+    def _analyze_run( self, step: DockerStep) -> list[DockerArtifactCandidate]:
 
         artifacts = []
 
@@ -207,21 +210,13 @@ class DockerArtifactDetector:
             artifacts.append(
 
                 DockerArtifactCandidate(
-
                     step_index=step.index,
-
                     artifact_type="download",
-
                     source=url,
-
                     destination=None,
-
                     source_type="download",
-
-                    reason="External download detected"
-
+                    reason="Download di file esterno"
                 )
-
             )
 
         #
@@ -235,21 +230,13 @@ class DockerArtifactDetector:
                 artifacts.append(
 
                     DockerArtifactCandidate(
-
                         step_index=step.index,
-
                         artifact_type="package_install",
-
                         source=pkg,
-
                         destination=None,
-
                         source_type="package",
-
-                        reason="APT package installation"
-
+                        reason="Installazione pacchetto APT"
                     )
-
                 )
 
         #
@@ -263,21 +250,13 @@ class DockerArtifactDetector:
                 artifacts.append(
 
                     DockerArtifactCandidate(
-
                         step_index=step.index,
-
                         artifact_type="package_install",
-
                         source=pkg,
-
                         destination=None,
-
                         source_type="package",
-
-                        reason="APK package installation"
-
+                        reason="Installazione pacchetto APK"
                     )
-
                 )
 
         #
@@ -291,21 +270,13 @@ class DockerArtifactDetector:
                 artifacts.append(
 
                     DockerArtifactCandidate(
-
                         step_index=step.index,
-
                         artifact_type="package_install",
-
                         source=pkg,
-
                         destination=None,
-
                         source_type="package",
-
-                        reason="PIP package installation"
-
+                        reason="Installazione pacchetto PIP"
                     )
-
                 )
 
         #
@@ -319,21 +290,13 @@ class DockerArtifactDetector:
                 artifacts.append(
 
                     DockerArtifactCandidate(
-
                         step_index=step.index,
-
                         artifact_type="package_install",
-
                         source=pkg,
-
                         destination=None,
-
                         source_type="package",
-
-                        reason="NPM package installation"
-
+                        reason="Installazione pacchetto NPM"
                     )
-
                 )
 
         #
@@ -345,23 +308,14 @@ class DockerArtifactDetector:
             for pkg in self._extract_packages(tokens, "install"):
 
                 artifacts.append(
-
                     DockerArtifactCandidate(
-
                         step_index=step.index,
-
                         artifact_type="package_install",
-
                         source=pkg,
-
                         destination=None,
-
                         source_type="package",
-
-                        reason="GEM package installation"
-
+                        reason="Installazione pacchetto GEM"
                     )
-
                 )
 
         #
@@ -387,21 +341,13 @@ class DockerArtifactDetector:
                 artifacts.append(
 
                     DockerArtifactCandidate(
-
                         step_index=step.index,
-
                         artifact_type="compiled_binary",
-
                         source=token,
-
                         destination=None,
-
                         source_type="compiled",
-
-                        reason=f"Compilation detected: {token}"
-
+                        reason=f"Trovata compilazione: {token}"
                     )
-
                 )
 
         return artifacts
