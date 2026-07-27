@@ -53,7 +53,16 @@ jobs:
       - name: Install Trivy
         run: |
           sudo apt-get update && sudo apt-get install -y trivy
-
+      
+      # uso di chache per Maven, utile se ci sono più job che usano Maven. Per evitare troppe richieste di rete e velocizzare il processo.
+      - name: Cache Maven
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+          
       - name: Setup and Analyze
         run: |
           # Accesso diretto ai campi dell'oggetto item della matrice
@@ -104,7 +113,7 @@ jobs:
               ./workspace_analisi/venv/bin/pip freeze > workspace_analisi/requirements.txt
               ;;
 
-            "compile_maven") cd "$PATH_DIR" && mvn clean install -DskipTests && cp -r . workspace_analisi/ ;;
+            "compile_maven") cd "$PATH_DIR" && mvn dependency:resolve -DskipTests && cp -r . workspace_analisi/ ;;
 
             "zip") wget -q "$URL" -O pkg.zip && unzip -o pkg.zip -d workspace_analisi/ ;;
 
@@ -125,13 +134,7 @@ jobs:
               ;;
 
           esac
-          echo "=== Maven files ==="
-          find workspace_analisi -name "pom.xml"
-          find workspace_analisi -name "build.gradle"
-          find workspace_analisi -name "*.jar"
-
-          echo "=== Size ==="
-          du -sh workspace_analisi
+          
           # ANALISI ISOLATA: Trivy guarda SOLO dentro 'workspace_analisi', in modo da non contaminare l'ambiente globale
           trivy fs --format cyclonedx --output "${CLEAN_NAME}-sbom.json" workspace_analisi/
 

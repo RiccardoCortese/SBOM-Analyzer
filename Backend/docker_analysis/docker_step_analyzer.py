@@ -27,6 +27,9 @@ class DockerStep:
 
     # Percorso del file SBOM generato per questo step
     sbom_path: str | None = None
+    
+    # Risultati dell'analisi YARA per questo step
+    yara_results: list | None = None
 
 
 class DockerStepAnalyzer:
@@ -58,20 +61,6 @@ class DockerStepAnalyzer:
         step_index = 0
 
 
-        # Istruzioni che vogliamo tracciare
-        tracked_instructions = {
-            "FROM",
-            "RUN",
-            "COPY",
-            "ADD",
-            "ARG",
-            "ENV",
-            "WORKDIR",
-            "USER",
-            "ENTRYPOINT",
-            "CMD"
-        }
-
 
         for inst in parser.structure:
 
@@ -85,8 +74,8 @@ class DockerStepAnalyzer:
 
 
             # Ignora istruzioni non interessanti
-            if instruction not in tracked_instructions:
-                continue
+            #if instruction not in tracked_instructions:
+            #    continue
 
 
             # Ricostruzione Dockerfile progressivo
@@ -157,11 +146,7 @@ class DockerStepAnalyzer:
 
 
 
-    def _format_instruction(
-        self,
-        instruction: str,
-        value: str
-    ) -> str:
+    def _format_instruction( self, instruction: str, value: str) -> str:
         """
         Ricrea la riga Dockerfile.
         """
@@ -170,10 +155,7 @@ class DockerStepAnalyzer:
 
 
 
-    def _changes_filesystem(
-        self,
-        instruction: str
-    ) -> bool:
+    def _changes_filesystem(self, instruction: str) -> bool:
         """
         Determina se l'istruzione modifica
         il filesystem dell'immagine.
