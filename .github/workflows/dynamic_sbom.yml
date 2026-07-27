@@ -79,7 +79,20 @@ jobs:
           mkdir -p workspace_analisi
           
           case $TYPE in
-            "git") git clone --depth 1 "$URL" workspace_analisi/repo ;;
+            "git")
+              git clone --depth 1 "$URL" workspace_analisi/repo
+
+              if find workspace_analisi/repo -name "pom.xml" | grep -q .; then
+                  echo "Progetto Maven trovato"
+
+                  cd workspace_analisi/repo
+
+                  mvn dependency:resolve -DskipTests || \
+                  echo "Risoluzione Maven fallita, continuo"
+
+                  cd "$GITHUB_WORKSPACE"
+              fi
+              ;;
 
             "apt") sudo apt-get install -y "$URL" && cp /var/lib/dpkg/status workspace_analisi/ ;;
 
