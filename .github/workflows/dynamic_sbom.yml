@@ -53,16 +53,7 @@ jobs:
       - name: Install Trivy
         run: |
           sudo apt-get update && sudo apt-get install -y trivy
-      - name: Debug repository
-        run: |
-          echo "=== Maven files ==="
-          find workspace_analisi -name "pom.xml"
-          find workspace_analisi -name "build.gradle"
-          find workspace_analisi -name "*.jar"
 
-          echo "=== Size ==="
-          du -sh workspace_analisi
-          
       - name: Setup and Analyze
         run: |
           # Accesso diretto ai campi dell'oggetto item della matrice
@@ -134,7 +125,13 @@ jobs:
               ;;
 
           esac
-          
+          echo "=== Maven files ==="
+          find workspace_analisi -name "pom.xml"
+          find workspace_analisi -name "build.gradle"
+          find workspace_analisi -name "*.jar"
+
+          echo "=== Size ==="
+          du -sh workspace_analisi
           # ANALISI ISOLATA: Trivy guarda SOLO dentro 'workspace_analisi', in modo da non contaminare l'ambiente globale
           trivy fs --format cyclonedx --output "${CLEAN_NAME}-sbom.json" workspace_analisi/
 
