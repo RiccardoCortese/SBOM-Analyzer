@@ -1,12 +1,15 @@
 import os
 import json
 import re
+import shutil
 from dockerfile_parse import DockerfileParser
 from docker_analysis.docker_step_analyzer import DockerStepAnalyzer
 from docker_analysis.docker_step_builder import DockerStepBuilder
 from docker_analysis.docker_image_analyzer import DockerImageAnalyzer
 from docker_analysis.sbom_diff import compare_sbom
 from docker_analysis.docker_artifact_detector import DockerArtifactDetector
+from docker_analysis.docker_filesystem_extraxtor import DockerFilesystemExtractor
+from security.yara_scanner import YaraScanner
 from config import STORAGE_DIR
 
 # ============================================================
@@ -288,73 +291,173 @@ def extract_base_images(dockerfile_content):
 
     return images
 
-# Funzione per analizzare un Dockerfile e restituire gli step
-def get_docker_analysis(dockerfile_content,  build_context):
+def get_docker_analysis(dockerfile_content, build_context):
 
-    # Analisi del Dockerfile per estrarre gli step e le immagini di base
-    # Uno step è rappresentato da un'istruzione RUN, COPY, ADD, ecc. e viene costruito un Dockerfile progressivo per ogni step
+    # Analisi Dockerfile
     analyzer = DockerStepAnalyzer(dockerfile_content)
 
     steps = analyzer.parse()
-    
-    # Analisi dei RUN per estrarre i candidati a artefatti (file copiati, pacchetti installati, ecc.), per possibili vulnerabilità
+
+    # Individuazione possibili artefatti
     artifact_detector = DockerArtifactDetector()
-    
+
     artifacts = artifact_detector.analyze(steps)
-    print (f"Artefatti rilevati: {len(artifacts)}")
-    print (f"Artefatti: {artifacts}")
-    
-    # Estrazioni delle immagini dal FROM del docker
+
+    # Estrazione immagini base
     images = extract_base_images(dockerfile_content)
 
-    # Costruzione delle immagini intermedie per ogni step e salvataggio dei tag
+    # Builder immagini intermedie
     builder = DockerStepBuilder(
         build_context=build_context
     )
-    
-    os.makedirs(os.path.join(STORAGE_DIR, "docker_sbom_steps"), exist_ok=True)
-    # Creazione di un'istanza di DockerImageAnalyzer per generare SBOM per ogni immagine intermedia
-    image_analyzer = DockerImageAnalyzer(output_dir=os.path.join(STORAGE_DIR, "docker_sbom_steps"))
+
+    filesystem_extractor = DockerFilesystemExtractor()
+
+    yara_scanner = YaraScanner(
+        "security/yara_rules/reversinglabs-yara-rules/yara"
+    )
+
+    all_yara_results = []
+
+    os.makedirs(
+        os.path.join(
+            STORAGE_DIR,
+            "docker_sbom_steps"
+        ),
+        exist_ok=True
+    )
+
+    image_analyzer = DockerImageAnalyzer(
+        output_dir=os.path.join(
+            STORAGE_DIR,
+            "docker_sbom_steps"
+        )
+    )
 
     try:
-        
+
         sbom_paths = []
+        previous_filesystem = None
+        filesystem_path = None
         
         for step in steps:
 
+            # Costruzione immagine dello step
             image = builder.build(step)
 
             print( "Creata immagine:", image )
 
-            # salvo il riferimento nello step
             step.image_tag = image
             
-            # genera SBOM
-            sbom_path = image_analyzer.generate_sbom( image, step.index)
+            if any(artifact.step_index == step.index for artifact in artifacts):
+                
+                print(f"[WARNING] Possibili artefatti rilevati nello step {step.index}")
+                
+                # ==========================
+                # YARA ANALYSIS
+                # ==========================
+                
+                filesystem_path = filesystem_extractor.extract(image)
+
+                try:
+                    if previous_filesystem:
+
+                        new_files = filesystem_extractor.get_new_files(
+                            previous_filesystem,
+                            filesystem_path
+                        )
+
+                        print(
+                            f"[YARA] Step {step.index}: {len(new_files)} nuovi file"
+                        )
+
+                        step_yara_results = yara_scanner.scan_files(
+                            filesystem_path,
+                            new_files
+                        )
+
+                    else:
+                        # primo step: puoi decidere se analizzarlo tutto
+                        new_files = filesystem_extractor.list_files(
+                            filesystem_path
+                        )
+
+                        step_yara_results = yara_scanner.scan_files(
+                            filesystem_path,
+                            new_files
+                        )
+                finally:
+                    shutil.rmtree(
+                        os.path.dirname(filesystem_path),
+                        ignore_errors=True
+                    )
+
+                step.yara_results = step_yara_results
+
+                all_yara_results.append(
+                    {
+                        "step": step.index,
+                        "image": image,
+                        "matches": step_yara_results
+                    }
+                )
+
+                print(f"[YARA] Step {step.index} - Risultati YARA: {len(step_yara_results)} match trovati")
+                if step_yara_results:
+
+                    print("[WARNING] Possibile Malware trovato nello step",step.index)
+
+                    print(step_yara_results)
+            
+            
+            # ==========================
+            # SBOM ANALYSIS
+            # ==========================
+
+            sbom_path = image_analyzer.generate_sbom(
+                image,
+                step.index
+            )
 
             print(f"SBOM generato: {sbom_path}")
 
-            # salvo riferimento nello step
             step.sbom_path = sbom_path
-            
-            sbom_paths.append(sbom_path)
-            
-            # Caricamento SBOM
-            sbom = image_analyzer.load_sbom(sbom_path)
 
-            unique_components = {comp.get("purl") for comp in sbom.get("components", []) if comp.get("purl")}
-        
-            step.total_components = len(unique_components)
-            print(f"Step {step.index}:", step.total_components, "componenti unici")
-            
+            sbom_paths.append(
+                sbom_path
+            )
+
+            sbom = image_analyzer.load_sbom(
+                sbom_path
+            )
+
+            unique_components = {
+                comp.get("purl")
+                for comp in sbom.get("components", [])
+                if comp.get("purl")
+            }
+
+            step.total_components = len(
+                unique_components
+            )
+
+            print( f"Step {step.index}:", step.total_components, "componenti unici" )
+
+        # ==========================
+        # SBOM DIFF
+        # ==========================
+
         diffs = []
 
         for i in range(1, len(sbom_paths)):
 
-            diff = compare_sbom(sbom_paths[i-1], sbom_paths[i]) # compara SBOM tra step i-1 e i
+            diff = compare_sbom(
+                sbom_paths[i-1],
+                sbom_paths[i]
+            )
 
-
-            diffs.append({
+            diffs.append(
+                {
                     "from": i-1,
                     "to": i,
                     "diff": diff
@@ -362,32 +465,38 @@ def get_docker_analysis(dockerfile_content,  build_context):
             )
 
     finally:
-
+        if filesystem_path:
+            shutil.rmtree(
+                filesystem_path,
+                ignore_errors=True
+            )
         builder.cleanup()
-    
+
+
     return {
-    "steps": [
-        {
-            "index": step.index,
-            "dockerfile_content": step.dockerfile_content,
-            "image_tag": step.image_tag,
-            "sbom_path": step.sbom_path,
-            "total_components": step.total_components
-        }
-        for step in steps
-    ],
-    "images": images,
-    "diffs": diffs,
-    "artifacts": [
-        {
-            "step_index": artifact.step_index,
-            "artifact_type": artifact.artifact_type,
-            "source": artifact.source,
-            "destination": artifact.destination,
-            "reason": artifact.reason,
-            "source_type": artifact.source_type
-        }
-        for artifact in artifacts
-    ]
-}
-    
+        "steps": [
+            {
+                "index": step.index,
+                "dockerfile_content": step.dockerfile_content,
+                "image_tag": step.image_tag,
+                "sbom_path": step.sbom_path,
+                "total_components": step.total_components,
+                "yara_results": step.yara_results
+            }
+            for step in steps
+        ],
+        "images": images,
+        "diffs": diffs,
+        "artifacts": [
+            {
+                "step_index": artifact.step_index,
+                "artifact_type": artifact.artifact_type,
+                "source": artifact.source,
+                "destination": artifact.destination,
+                "reason": artifact.reason,
+                "source_type": artifact.source_type
+            }
+            for artifact in artifacts
+        ],
+        "yara": all_yara_results
+    }

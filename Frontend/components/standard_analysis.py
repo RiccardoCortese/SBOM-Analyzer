@@ -25,7 +25,8 @@ def render_standard_analysis(backend_url: str):
         render_docker_sbom_analysis(
             st.session_state.steps,
             st.session_state.diffs,
-            st.session_state.artifacts
+            st.session_state.artifacts,
+            st.session_state.yara_results
         )
     
     st.markdown("---")

@@ -99,7 +99,8 @@ async def upload_sbom(
                 "steps": result["steps"],
                 "images": images,
                 "diffs": result["diffs"],
-                "artifacts": result.get("artifacts", [])
+                "artifacts": result.get("artifacts", []),
+                "yara": result.get("yara", [])
             }
             
         finally:

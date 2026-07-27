@@ -2,7 +2,7 @@ import streamlit as st
 import plotly.graph_objects as go
 
 
-def render_docker_sbom_analysis(steps, diffs, artifacts):
+def render_docker_sbom_analysis(steps, diffs, artifacts, yara_results):
 
     st.subheader("Docker SBOM Evolution")
 
@@ -65,6 +65,18 @@ def render_docker_sbom_analysis(steps, diffs, artifacts):
                             st.write(f"Reason: {artifact['reason']}")
                             st.write(f"Source Type: {artifact['source_type']}")
                             artefatto = True
+
+                            st.markdown(f"##### 🔎 YARA Scan Results")
+                            if yara_results:
+                                for yara in yara_results:
+                                    if yara["step_index"] == step["index"]:
+                                        st.write(f" ⚠️ Possibili minacce rilevate da YARA:")
+                                        st.write(f"Image: {yara['image']}")
+                                        st.write(f"Match: {yara['match']}")
+                                    else:
+                                        st.write(f"✅ Nessuna minaccia rilevata da YARA in questo step.")
+                            else:
+                                st.write(f"✅ Nessuna minaccia rilevata da YARA in questo step.")
                             st.divider()
                     if not any(artifact["step_index"] == step["index"] for artifact in artifacts):
                         st.write("✅ Nessun artefatto rilevato in questo step.")
