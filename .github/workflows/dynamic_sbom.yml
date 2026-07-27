@@ -34,7 +34,7 @@ jobs:
           # Legge tutto l'array dal file
           DEPENDENCIES=$(jq -c '.' ${{ github.event.inputs.path_dipendenze }})
           echo "matrix=$DEPENDENCIES" >> $GITHUB_OUTPUT
-
+      
   # --- JOB 2: ANALISI IN PARALLELO ---
   trivy-analysis:
     needs: parse-dependencies
@@ -53,7 +53,16 @@ jobs:
       - name: Install Trivy
         run: |
           sudo apt-get update && sudo apt-get install -y trivy
+      - name: Debug repository
+        run: |
+          echo "=== Maven files ==="
+          find workspace_analisi -name "pom.xml"
+          find workspace_analisi -name "build.gradle"
+          find workspace_analisi -name "*.jar"
 
+          echo "=== Size ==="
+          du -sh workspace_analisi
+          
       - name: Setup and Analyze
         run: |
           # Accesso diretto ai campi dell'oggetto item della matrice
