@@ -39,14 +39,14 @@ def render_config_target(backend_url: str):
     elif docker_choice == "Genera SBOM Docker":
         # Se l'utente sceglie di generare lo SBOM Docker, mostriamo i campi per il tag dell'immagine e il tipo di vulnerabilità da scansionare
             
-        docker_image_tag = st.text_input(
+        st.config_docker_image_tag = st.text_input(
             "Tag Immagine / Nome Dockerfile custom:",
-            value="paperlessngx/paperless-ngx:dev",
+            value="stfbk/tlsassistant:v3.2-dev3",
             placeholder="es. myrepo/myimage:latest"
         )
         
         # Tipo di vulnerabilità da scansionare con Trivy
-        vuln_type = st.selectbox(
+        st.config_vuln_type = st.selectbox(
             "Seleziona cosa scansionare nell'immagine Docker:",
             
             options=["os,library", "os", "library"],

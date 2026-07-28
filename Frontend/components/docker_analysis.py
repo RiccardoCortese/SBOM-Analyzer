@@ -7,7 +7,7 @@ def render_docker_section(backend_url: str):
     st.subheader("Sezione di Analisi Immagine Docker")
     
     docker_choice = st.session_state.get("config_docker_choice", "Genera SBOM Docker")
-    docker_image_tag = st.session_state.get("config_docker_image_tag", "paperlessngx/paperless-ngx:dev")
+    docker_image_tag = st.session_state.get("config_docker_image_tag", "stfbk/tlsassistant:v3.2-dev3")
     vuln_type = st.session_state.get("config_vuln_type", "os,library")
     docker_file = st.session_state.get("config_docker_uploader", None)
     if docker_choice == "Genera SBOM Docker":
@@ -140,7 +140,7 @@ def render_docker_section(backend_url: str):
                 )
         
 
-        with st.expander(f"🟢 Pacchetti comuni tra Docker e Sorgente ({current_docker_report.get('packages_in_common_count', 0)})"):
+        with st.expander(f"✅ Pacchetti comuni tra Docker e Sorgente ({current_docker_report.get('packages_in_common_count', 0)})"):
             if current_docker_report.get("in_common"):
                 
                 data = []
@@ -157,7 +157,7 @@ def render_docker_section(backend_url: str):
                 st.info("Nessuna corrispondenza trovata.")
         
         
-        with st.expander(f"🔴 Pacchetti solo dentro l'Immagine Docker ({current_docker_report.get('packages_only_in_docker_count', 0)})"):
+        with st.expander(f"⚠️ Pacchetti solo dentro l'Immagine Docker ({current_docker_report.get('packages_only_in_docker_count', 0)})"):
             st. info("Questa sezione mostra i pacchetti presenti solo nell'immagine Docker.")
             
             if current_docker_report.get("only_in_docker"):
@@ -173,7 +173,7 @@ def render_docker_section(backend_url: str):
         
                 st.info("Nessun pacchetto extra rilevato.")
         
-        with st.expander(f"⚠️ Pacchetti con Versioni Differenti ({len(current_docker_report.get('version_mismatches', []))})"):
+        with st.expander(f"❗ Pacchetti con Versioni Differenti ({len(current_docker_report.get('version_mismatches', []))})"):
             mismatches = current_docker_report.get("version_mismatches", [])
             if mismatches:
                 df_mismatch = pd.DataFrame([
