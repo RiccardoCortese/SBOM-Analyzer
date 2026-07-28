@@ -1,6 +1,5 @@
 import os
 import json
-import tempfile
 import subprocess
 
 from utils.tools import get_trivy_path
@@ -8,7 +7,7 @@ from utils.tools import get_trivy_path
 
 class DockerImageAnalyzer:
     def __init__(self, output_dir=None):
-        self.output_dir = output_dir or tempfile.mkdtemp(prefix="sbom_steps_") 
+        self.output_dir = output_dir
         self.trivy_path = get_trivy_path()
 
     def generate_sbom(self, image_tag: str, step_index: int) -> str:

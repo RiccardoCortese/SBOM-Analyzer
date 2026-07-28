@@ -53,7 +53,7 @@ async def upload_sbom(
         if not repo_url:
             raise HTTPException(400, "URL repository mancante.")
             
-        tmp_clone = tempfile.mkdtemp()
+        tmp_clone = os.path.join(STORAGE_DIR, "tmp_clone")
         try:
             try:
                 subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, repo_url, tmp_clone], check=True)
@@ -104,7 +104,7 @@ async def upload_sbom(
             }
             
         finally:
-            shutil.rmtree(tmp_clone, onerror=remove_readonly)
+            shutil.rmtree(tmp_clone, onerror=remove_readonly, ignore_errors=True)
                 
     # Se l'azione è "upload", salviamo tutti i file manuali caricati (requirements, poetry, docker) per l'analisi comparativa
     if action == "upload":

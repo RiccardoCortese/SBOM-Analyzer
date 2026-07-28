@@ -339,7 +339,7 @@ def get_docker_analysis(dockerfile_content, build_context):
         sbom_paths = []
         previous_filesystem = None
         filesystem_path = None
-        
+        #steps = steps[:8]
         for step in steps:
 
             # Costruzione immagine dello step
@@ -387,10 +387,14 @@ def get_docker_analysis(dockerfile_content, build_context):
                             new_files
                         )
                 finally:
-                    shutil.rmtree(
-                        os.path.dirname(filesystem_path),
-                        ignore_errors=True
-                    )
+                    
+                    previous_filesystem = filesystem_path
+                    
+                    if filesystem_path:
+                        shutil.rmtree(
+                            os.path.dirname(filesystem_path),
+                            ignore_errors=True
+                        )
 
                 step.yara_results = step_yara_results
 
@@ -467,9 +471,10 @@ def get_docker_analysis(dockerfile_content, build_context):
     finally:
         if filesystem_path:
             shutil.rmtree(
-                filesystem_path,
+                os.path.dirname(filesystem_path),
                 ignore_errors=True
             )
+
         builder.cleanup()
 
 
