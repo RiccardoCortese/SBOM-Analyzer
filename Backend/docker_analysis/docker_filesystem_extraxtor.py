@@ -7,6 +7,7 @@ import subprocess
 import uuid
 import tarfile
 from pathlib import Path
+from config import STORAGE_DIR
 
 
 class DockerFilesystemExtractor:
@@ -86,12 +87,12 @@ class DockerFilesystemExtractor:
 
     def extract(self, image_tag: str) -> str:
 
-        if os.name == "nt":
-            base_dir = "C:\\tmp"
-            os.makedirs(base_dir, exist_ok=True)
-            folder = tempfile.mkdtemp(prefix="d_", dir=base_dir)
-        else:
-            folder = tempfile.mkdtemp()
+           
+        docker_step_dir = os.path.join(STORAGE_DIR, "docker_step")
+
+        os.makedirs(docker_step_dir, exist_ok=True)
+
+        folder = tempfile.mkdtemp( prefix="d_", dir=docker_step_dir)
 
         container = f"extract-{uuid.uuid4().hex[:8]}"
 

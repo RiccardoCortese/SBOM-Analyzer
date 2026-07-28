@@ -4,7 +4,7 @@ import subprocess
 import shutil
 
 from docker_analysis.docker_step_analyzer import DockerStep
-
+from config import STORAGE_DIR
 
 
 class DockerStepBuilder:
@@ -23,10 +23,13 @@ class DockerStepBuilder:
             self.build_context
         )
         
-        # cartella temporanea dove creare i Dockerfile
-        self.temp_dir = tempfile.mkdtemp(
-            prefix="docker_step_builder_"
-        )
+        # Cartella temporanea dove creare i Dockerfile
+        docker_step_dir = os.path.join(STORAGE_DIR,"docker_step")
+
+        os.makedirs(docker_step_dir,exist_ok=True)
+
+        self.temp_dir = tempfile.mkdtemp(prefix="docker_step_builder_",dir=docker_step_dir)
+
 
 
     # normalizzazione dei file di script (bash, sh, py) per evitare problemi di fine linea
@@ -59,16 +62,9 @@ class DockerStepBuilder:
         """
 
 
-        step_dir = os.path.join(
-            self.temp_dir,
-            f"step_{step.index}"
-        )
+        step_dir = os.path.join( self.temp_dir, f"step_{step.index}")
 
-
-        os.makedirs(
-            step_dir,
-            exist_ok=True
-        )
+        os.makedirs( step_dir, exist_ok=True)
 
 
         dockerfile_path = os.path.join(
@@ -140,7 +136,17 @@ class DockerStepBuilder:
         Cancella i file temporanei.
         """
 
-        shutil.rmtree(
-            self.temp_dir,
-            ignore_errors=True
-        )
+        # Pulizia cartella temporanea
+        shutil.rmtree( self.temp_dir, ignore_errors=True)
+        
+        # Pulizia immagini intermedie
+        subprocess.run(
+        [
+            "docker",
+            "image",
+            "prune",
+            "-f"
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    )
