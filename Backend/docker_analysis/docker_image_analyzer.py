@@ -1,6 +1,5 @@
 import os
 import json
-import tempfile
 import subprocess
 
 from utils.tools import get_trivy_path

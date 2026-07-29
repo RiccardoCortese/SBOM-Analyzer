@@ -8,7 +8,7 @@ def render_custom_analysis(backend_url: str):
     # ============================================================
     
     st.subheader("📋 File custom di dipendenze rilevati")
-    custom_found = [f for f in st.session_state.found_files if f.lower() not in ["requirements.txt", "poetry.lock", "pyproject.toml"]]
+    custom_found = [f for f in st.session_state.found_files if f.lower() not in ["requirements.txt", "poetry.lock", "pyproject.toml", "uv.lock"]]
     custom_file = st.selectbox(
         "Seleziona il fileda analizzare:",
         options=custom_found,

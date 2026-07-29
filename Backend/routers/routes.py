@@ -1,7 +1,6 @@
 import os
 import json
 import shutil
-import tempfile
 import subprocess
 import fnmatch
 import stat
@@ -263,8 +262,9 @@ def analyze_custom_file(
     repo_url: str = Form(...), 
     branch: str = Form(...), 
     path_file: str = Form(...)
-):
-    tmp_clone = tempfile.mkdtemp() # Creiamo una cartella temporanea per il clone del repository
+):  
+    tmp_clone = os.path.join(STORAGE_DIR, "tmp_clone_custom") # Creiamo una cartella temporanea per il clone del repository
+    os.makedirs(tmp_clone, exist_ok=True)
     
     try:
     

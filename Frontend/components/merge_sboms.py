@@ -32,7 +32,7 @@ def render_merge_sboms(backend_url: str):
                     res_graphs = requests.get(f"{backend_url}/generate-graphs")
                     if res_graphs.status_code == 200:
                         graph_data = res_graphs.json()
-                        st.session_state.deep_sbom_results = graph_data
+                        st.session_state.setdefault("deep_sbom_results", {}).update(graph_data)
                         st.success("Grafi generati con successo!")
                         st.rerun()
                     else:
