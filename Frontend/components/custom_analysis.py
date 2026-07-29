@@ -102,4 +102,4 @@ def render_custom_analysis(backend_url: str):
                     use_container_width=True,
                     key=f"download_custom_{i}"
                 )
-        st.markdown("---")
+        st.divider() # Separatore grafico tra i file

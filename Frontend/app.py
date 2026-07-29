@@ -11,6 +11,7 @@ from components.standard_analysis import render_standard_analysis
 from components.custom_analysis import render_custom_analysis
 from components.merge_sboms import render_merge_sboms
 from components.graph_visualization import render_graph_section
+from components.search_component import render_search_component
 
 # ============================================================
 # CONFIGURAZIONE APP STREAMLIT
@@ -70,6 +71,8 @@ render_merge_sboms(BACKEND_URL)
 
 # Sezione Analisi Immagine Docker e Confronto
 render_docker_section(BACKEND_URL)
+
+render_search_component(BACKEND_URL)
 
 # Sezione Grafi e Visualizzazione Avanzata delle Dipendenze
 render_graph_section(BACKEND_URL)
