@@ -17,6 +17,7 @@ from services.sbom_parser import (
     build_universal_hierarchy, get_dependency_weight
 )
 from services.sbom_parser import extract, classify, parse_github_url
+from services.component_search import search_component, build_component_graph
 
 router = APIRouter()
 
@@ -731,4 +732,30 @@ def generate_docker_sbom(
         "raw_docker_sbom": raw_docker_sbom,
         "graphs": docker_graph_results,
         "hierarchy_with_weights": hierarchy_with_weights
+    }
+
+@router.get("/search-component")
+def search_component_endpoint(name:str):
+
+    matches = search_component( name, STORAGE_DIR)
+
+    graphs = []
+
+    for item in matches:
+
+        graph = build_component_graph( item["purl"], item["sbom"])
+
+        graphs.append(
+            {
+                "sbom": item["sbom"],
+                "component": item,
+                "graph": graph
+            }
+        )
+
+    print(f"[DEBUG] grafici: {graphs}", flush=True)
+
+    return {
+        "component":name,
+        "matches":graphs
     }
