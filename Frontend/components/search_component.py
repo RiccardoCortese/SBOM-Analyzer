@@ -7,33 +7,35 @@ def render_search_component(backend_url: str):
 
     st.markdown("## 🔎 Ricerca Componente")
 
-    component = st.text_input(
-        "Cerca nome componente",
-    )
-
-
-    if st.button("Cerca"):
-
-        response = requests.get(
-            f"{backend_url}/search-component",
-            params={
-                "name": component
-            }
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        component = st.text_input(
+            "Cerca nome componente",
         )
 
+    with col2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("Cerca"):
 
-        if response.status_code == 200:
-
-            data = response.json()
-
-            st.success(
-                f"Trovato in {len(data['matches'])} SBOM"
+            response = requests.get(
+                f"{backend_url}/search-component",
+                params={
+                    "name": component
+                }
             )
 
-            st.session_state.component_graph = data
 
-        else:
-            st.error(response.text)
+            if response.status_code == 200:
+
+                data = response.json()
+
+                st.info(f"Trovato in {len(data['matches'])} SBOM")
+
+                st.session_state.component_graph = data
+
+            else:
+                st.error(response.text)
 
 
     if "component_graph" in st.session_state:

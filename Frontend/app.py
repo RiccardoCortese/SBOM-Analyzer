@@ -64,7 +64,9 @@ if "found_files" in st.session_state and st.session_state.found_files:
     render_standard_analysis(BACKEND_URL)
     
     # Analisi File Custom / Immagini Docker rilevate nel Dockerfile
-    render_custom_analysis(BACKEND_URL)
+    # in questo caso nonmi serve perchè ci sono già le immagini docker nel parsing del dockerfile
+    # la tengo commentata per ora
+    #render_custom_analysis(BACKEND_URL)
 
 # Sezione Merge Artefatti SBOM e generazione grafici
 render_merge_sboms(BACKEND_URL)

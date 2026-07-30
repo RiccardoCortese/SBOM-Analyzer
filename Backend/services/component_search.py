@@ -56,7 +56,9 @@ def search_component(component, sbom_dir):
         except Exception:
             continue
 
-
+        # Componenti già visti in questo SBOM
+        seen = set()
+        
         # Controllo che sia un CycloneDX valido
         if not isinstance(sbom, dict):
             continue
@@ -71,6 +73,11 @@ def search_component(component, sbom_dir):
             name = comp.get("name", "")
             purl = comp.get("purl", "")
 
+            # Salta i duplicati
+            key = (name, purl)
+            if key in seen:
+                continue
+            seen.add(key)
 
             if (
                 component.lower() in name.lower()
