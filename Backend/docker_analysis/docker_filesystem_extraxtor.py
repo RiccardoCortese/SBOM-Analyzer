@@ -1,6 +1,7 @@
 # Classe per estrarre il filesystem da un'immagine , in preparazione per l'analisi con YARA
 # Prende un'immagine Docker e ricava il contenuto interno come se fosse una normale cartella
 import os
+from os import path
 import shutil
 import tempfile
 import subprocess
@@ -53,28 +54,39 @@ class DockerFilesystemExtractor:
 
         return list(new_files - old_files)
     
+    # solo per Windows, per evitare problemi con path troppo lunghi
+    def long_path(self, path):
+        if os.name == "nt":
+            return "\\\\?\\" + os.path.abspath(path)
+        return path
+    
     def safe_extract(self, tar, path):
-        # Estrazione sicura evitando path traversal
+        # Estrazione sicura evitando path traversal, ossia 
+
+        base_path = os.path.abspath(path)
+
+        ignored = [
+            "node_modules",
+            ".pnpm",
+            ".git",
+            ".cache",
+            "__pycache__",
+            "dist",
+            "build"
+        ]
+
         for member in tar.getmembers():
 
-            member_path = os.path.abspath(os.path.join(path, member.name))
+            member_path = os.path.abspath(
+                os.path.join(path, member.name)
+            )
 
-            if not member_path.startswith(os.path.abspath(path)):
+            # evita path traversal
+            if os.path.commonpath([member_path, base_path]) != base_path:
                 raise Exception("Unsafe tar archive")
-            
-            # file da ignorare (node_modules, .git, .cache, ecc.), non utile per l'analisi YARA e che può rallentare l'estrazione
-            
-            ignored = [
-                "node_modules",
-                ".pnpm",
-                ".git",
-                ".cache",
-                "__pycache__",
-                "dist",
-                "build"
-            ]
-            
 
+
+            # ignora cartelle/file inutili
             if any(x in member.name for x in ignored):
                 continue
 
@@ -83,8 +95,21 @@ class DockerFilesystemExtractor:
             if member.issym() or member.islnk():
                 continue
 
-            tar.extract(member, path)
 
+            try:
+                # crea prima le directory mancanti
+                target_dir = os.path.dirname(member_path)
+
+                if target_dir:
+                    os.makedirs(target_dir, exist_ok=True)
+
+                #path = self.long_path(path)
+                tar.extract(member, path)
+
+            except FileNotFoundError as e:
+                print(f"[WARNING] File non estratto (path troppo lungo?): {member.name}")
+                continue
+            
     def extract(self, image_tag: str) -> str:
 
            
