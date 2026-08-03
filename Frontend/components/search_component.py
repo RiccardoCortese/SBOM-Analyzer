@@ -29,9 +29,6 @@ def render_search_component(backend_url: str):
             if response.status_code == 200:
 
                 data = response.json()
-
-                st.info(f"Trovato in {len(data['matches'])} SBOM")
-
                 st.session_state.component_graph = data
 
             else:
@@ -39,7 +36,7 @@ def render_search_component(backend_url: str):
 
 
     if "component_graph" in st.session_state:
-
+        st.info(f"Trovato in {len(st.session_state.component_graph['matches'])} SBOM")
         matches = st.session_state.component_graph["matches"]
 
         sbom_names = [
