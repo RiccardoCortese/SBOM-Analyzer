@@ -40,11 +40,7 @@ class DockerArtifactDetector:
         ]
 
 
-    def _extract_packages(
-        self,
-        tokens: list[str],
-        install_keyword: str
-    ) -> list[str]:
+    def _extract_packages( self, tokens: list[str], install_keyword: str) -> list[str]:
 
         packages = []
 
