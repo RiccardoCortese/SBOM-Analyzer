@@ -65,16 +65,20 @@ def render_docker_sbom_analysis(steps, diffs, artifacts, yara_results):
                             st.write(f"Reason: {artifact['reason']}")
                             st.write(f"Source Type: {artifact['source_type']}")
                             artefatto = True
-
+                            
+                            
                             st.markdown(f"##### 🔎 YARA Scan Results")
                             if yara_results:
                                 for yara in yara_results:
-                                    if yara["step_index"] == step["index"]:
-                                        st.write(f" ⚠️ Possibili minacce rilevate da YARA:")
-                                        st.write(f"Image: {yara['image']}")
-                                        st.write(f"Match: {yara['match']}")
+                                    if yara["valid"] == True: 
+                                        if yara["step_index"] == step["index"]:
+                                            st.write(f" ⚠️ Possibili minacce rilevate da YARA:")
+                                            st.write(f"Image: {yara['image']}")
+                                            st.write(f"Match: {yara['match']}")
+                                        else:
+                                            st.write(f"✅ Nessuna minaccia rilevata da YARA in questo step.")
                                     else:
-                                        st.write(f"✅ Nessuna minaccia rilevata da YARA in questo step.")
+                                        st.write(f"Non eseguito YARA in questo step.")
                             else:
                                 st.write(f"✅ Nessuna minaccia rilevata da YARA in questo step.")
                             st.divider()

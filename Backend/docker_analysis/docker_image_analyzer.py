@@ -15,6 +15,8 @@ class DockerImageAnalyzer:
 
         command = [
             self.trivy_path,
+            "--timeout",
+            "15m",
             "image",
             "--format",
             "cyclonedx",

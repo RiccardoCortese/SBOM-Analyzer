@@ -140,7 +140,7 @@ def render_docker_section(backend_url: str):
                 )
         
 
-        with st.expander(f"🟢 Pacchetti comuni tra Docker e Sorgente ({current_docker_report.get('packages_in_common_count', 0)})"):
+        with st.expander(f"✅ Pacchetti comuni tra Docker e Sorgente ({current_docker_report.get('packages_in_common_count', 0)})"):
             if current_docker_report.get("in_common"):
                 
                 data = []
@@ -157,8 +157,8 @@ def render_docker_section(backend_url: str):
                 st.info("Nessuna corrispondenza trovata.")
         
         
-        with st.expander(f"🔴 Pacchetti solo dentro l'Immagine Docker ({current_docker_report.get('packages_only_in_docker_count', 0)})"):
-            st. info("Questa sezione mostra i pacchetti presenti solo nell'immagine Docker.")
+        with st.expander(f"⚠️ Pacchetti solo dentro l'Immagine Docker ({current_docker_report.get('packages_only_in_docker_count', 0)})"):
+            st.info("Questa sezione mostra i pacchetti presenti solo nell'immagine Docker.")
             
             if current_docker_report.get("only_in_docker"):
                 data = []
@@ -173,7 +173,7 @@ def render_docker_section(backend_url: str):
         
                 st.info("Nessun pacchetto extra rilevato.")
         
-        with st.expander(f"⚠️ Pacchetti con Versioni Differenti ({len(current_docker_report.get('version_mismatches', []))})"):
+        with st.expander(f"❗ Pacchetti con Versioni Differenti ({len(current_docker_report.get('version_mismatches', []))})"):
             mismatches = current_docker_report.get("version_mismatches", [])
             if mismatches:
                 df_mismatch = pd.DataFrame([
