@@ -7,6 +7,7 @@ from components.custom_analysis import render_custom_analysis
 from components.merge_sboms import render_merge_sboms
 from components.graph_visualization import render_graph_section
 from components.search_component import render_search_component
+from components.scan_vulnerability import render_scan_vulnerability
 
 
 # ============================================================
@@ -67,6 +68,9 @@ render_merge_sboms(BACKEND_URL)
 
 # Sezione Analisi Immagine Docker e Confronto
 render_docker_section(BACKEND_URL)
+
+# Sezione Vulnerability Scan 
+render_scan_vulnerability(BACKEND_URL)
 
 # sezione Ricerca Componente e Visualizzazione Dipendenze
 render_search_component(BACKEND_URL)
