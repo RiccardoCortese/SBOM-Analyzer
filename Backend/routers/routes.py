@@ -90,10 +90,15 @@ async def upload_sbom(
             with open(os.path.join(STORAGE_DIR, "discovered_files.json"), "w") as f:
                 json.dump(found_files, f)
             
-            result = get_docker_analysis(docker_content, tmp_clone) if docker_content else {"steps": [], "images": [], "diffs": []}
+            result = get_docker_analysis(docker_content, tmp_clone) if docker_content else {"steps": [], "images": [], "diffs": [], "artifacts": [], "yara": [], "removed_components": []}
 
             images = result["images"]
 
+            removed_path = os.path.join(STORAGE_DIR, "removed_components.json")
+
+            with open(removed_path, "w") as f:
+                json.dump(result["removed_components"], f)
+                
             return {
                 "status": "success", 
                 "files": found_files, 
@@ -460,7 +465,15 @@ def merge_artifacts():
     files_to_merge = glb.glob(os.path.join(STORAGE_DIR, "manifests", "*.json")) + \
                      glb.glob(os.path.join(STORAGE_DIR, "dependencies", "*.json")) + \
                      glb.glob(os.path.join(STORAGE_DIR, "docker_sbom_steps", "*.json"))
-                     
+    
+    removed_path = os.path.join(STORAGE_DIR, "removed_components.json")
+
+    if os.path.exists(removed_path):
+        with open(removed_path) as f:
+            components_to_remove = json.load(f)
+    else:
+        components_to_remove = []
+        
     if not files_to_merge:
         raise HTTPException(status_code=400, detail="Nessun file SBOM trovato per il merge.")
     
@@ -481,6 +494,31 @@ def merge_artifacts():
     except subprocess.CalledProcessError as e:
         raise HTTPException(status_code=500, detail=f"Errore durante il merge CycloneDX: {e}")
     
+    
+    # RIMUOVERE COMPONENTI SPECIFICI DAL MERGE (se presenti in removed_components)
+    if components_to_remove:
+        # legge lo SBOM appena creato
+        with open(final_sbom, "r", encoding="utf-8") as f:
+            merged_content = json.load(f)
+
+        # prende solo i purl dei componenti da rimuovere
+        removed_purls = {
+            comp.get("purl")
+            for comp in components_to_remove
+            if comp.get("purl")
+        }
+
+        # rimuove i componenti
+        merged_content["components"] = [
+            comp for comp in merged_content.get("components", [])
+            if comp.get("purl") not in removed_purls
+        ]
+
+        # riscrive lo SBOM finale filtrato
+        with open(final_sbom, "w", encoding="utf-8") as f:
+            json.dump( merged_content, f, indent=2)
+        
+
     with open(final_sbom, "r", encoding="utf-8") as f:
         content = json.load(f) 
     
@@ -689,7 +727,19 @@ def generate_docker_sbom(
     
     
     # --- Analisi separata per le dipendenze che ci sono nel sorgente ma non nel docker SBOM ---
+    
+    
+    removed_path = os.path.join(STORAGE_DIR, "removed_components.json")
+
+    if os.path.exists(removed_path):
+        with open(removed_path, "r", encoding="utf-8") as f:
+            components_to_remove = json.load(f)
+    else:
+        components_to_remove = []
+    
+    
     docker_purl_set = {dc["purl"].lower().strip() for dc in docker_components if dc.get("purl")}
+    removed_purl_set = { comp["purl"].lower().strip() for comp in components_to_remove if comp.get("purl")}
     missing_in_docker = []
 
     for purl, entries in code_map.items():

@@ -340,7 +340,7 @@ def get_docker_analysis(dockerfile_content, build_context):
         previous_filesystem = None
         filesystem_path = None
         # per test solo i primi 8 step
-        steps = steps[:8]
+        #steps = steps[:8]
         for step in steps:
 
             # Costruzione immagine dello step
@@ -355,9 +355,9 @@ def get_docker_analysis(dockerfile_content, build_context):
                 print(f"[WARNING] Possibili artefatti rilevati nello step {step.index}")
                 
                 # ==========================
-                # YARA ANALYSIS
+                # YARA ANALYSIS, se si vuole analisi decommentare qui
                 # ==========================
-                
+                """
                 filesystem_path = filesystem_extractor.extract(image)
 
                 try:
@@ -412,7 +412,19 @@ def get_docker_analysis(dockerfile_content, build_context):
 
                     print("[WARNING] Possibile Malware trovato nello step",step.index)
 
-                    print(step_yara_results)
+                    print(step_yara_results)"""
+                    
+                
+            # voglio all_yara_results vuoto   
+            all_yara_results.append(
+                {
+                    "step": step.index,
+                    "image": image,
+                    "matches": [],
+                    "valid": False
+                }
+            )
+            
             
             
             # ==========================
@@ -468,6 +480,8 @@ def get_docker_analysis(dockerfile_content, build_context):
                     "diff": diff
                 }
             )
+            
+            removed_components = diff.get("removed", [])
 
     finally:
         if filesystem_path:
@@ -503,5 +517,6 @@ def get_docker_analysis(dockerfile_content, build_context):
             }
             for artifact in artifacts
         ],
-        "yara": all_yara_results
+        "yara": all_yara_results,
+        "removed_components": removed_components
     }

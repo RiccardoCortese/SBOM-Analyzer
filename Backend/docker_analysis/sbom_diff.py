@@ -37,7 +37,8 @@ def load_components(sbom_path: str) -> dict:
         components[key] = {
             "name": component.get("name"),
             "version": component.get("version"),
-            "type": component.get("type")
+            "type": component.get("type"),
+            "purl": component.get("purl")
         }
 
     return components
