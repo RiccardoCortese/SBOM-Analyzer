@@ -18,6 +18,7 @@ from services.sbom_parser import (
     build_universal_hierarchy, get_dependency_weight
 )
 from services.component_search import search_component, build_component_graph
+from utils.tools import get_trivy_path
 
 router = APIRouter()
 
@@ -385,6 +386,73 @@ def merge_artifacts():
         content = json.load(f) 
     
     return {"status": "success", "data": content, "merged_file": final_sbom}
+
+# ============================================================
+# SCAN VULNERABILITIES SULLO SBOM UNIFICATO DOPO IL MERGE (tramite Trivy)
+# ===========================================================
+
+@router.get("/scan-merged-sbom")
+def scan_merged_sbom():
+
+    # SBOM generato dal merge precedente
+    final_sbom = os.path.join( STORAGE_DIR, "final_merged_sbom.json")
+
+    if not os.path.exists(final_sbom):
+        raise HTTPException(status_code=404, detail="SBOM finale non trovato. Eseguire prima il merge.")
+
+
+    # percorso trivy
+    trivy_exe = get_trivy_path()
+
+    if not os.path.exists(trivy_exe):
+        raise HTTPException( status_code=500, detail="Trivy non trovato.")
+
+
+    # output report vulnerabilità
+    vulnerability_report = os.path.join(STORAGE_DIR, "trivy_vulnerabilities.json")
+
+    command = [
+        trivy_exe,
+        "sbom",
+        "--format",
+        "json",
+        "--output",
+        vulnerability_report,
+        final_sbom
+    ]
+
+    try:
+
+        subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True
+        )
+
+
+    except subprocess.CalledProcessError as e:
+
+        raise HTTPException( status_code=500, detail=f"Errore durante scansione Trivy: {e.stderr}")
+
+    # controllo output
+    if not os.path.exists(vulnerability_report):
+
+        raise HTTPException( status_code=500, detail="Report Trivy non generato.")
+
+
+    # carica risultato
+    with open( vulnerability_report, "r", encoding="utf-8") as f:
+        report = json.load(f)
+
+
+    return {
+        "status": "success",
+        "sbom": final_sbom,
+        "report": vulnerability_report,
+        "data": report
+    }
+
 # ============================================================
 # GENERAZIONE GRAFI PER TUTTI I FILE TROVATI NELLA CARTELLA STORAGE (manifests e dependencies)
 # ============================================================

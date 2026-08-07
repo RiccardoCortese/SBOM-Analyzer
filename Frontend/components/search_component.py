@@ -5,7 +5,7 @@ from streamlit_agraph import agraph, Node, Edge, Config
 
 def render_search_component(backend_url: str):
 
-    st.markdown("## 🔎 Ricerca Componente")
+    st.subheader("Ricerca Componente")
 
     col1, col2 = st.columns([1, 1])
     
