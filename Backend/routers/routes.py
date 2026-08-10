@@ -20,6 +20,7 @@ from services.sbom_parser import (
 from services.component_search import search_component, build_component_graph
 from utils.tools import get_trivy_path
 from routers.cve_routes import router as cve_router
+from routers.cve_routes import get_nvd_severity
 
 router = APIRouter()
 
@@ -446,7 +447,20 @@ def scan_merged_sbom():
     # carica risultato
     with open(vulnerability_report, "r", encoding="utf-8") as f:
         report = json.load(f)
+        
+        
+    for result in report.get("Results", []):
+        for vuln in result.get("Vulnerabilities", []):
+            cve_id = vuln.get("VulnerabilityID")
 
+            if cve_id:
+                nvd_severity = get_nvd_severity(cve_id)
+
+                vuln["NVDSeverity"] = (
+                    nvd_severity
+                    if nvd_severity
+                    else vuln.get("Severity", "UNKNOWN")
+                )
 
     return {
         "status": "success",
