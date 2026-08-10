@@ -19,8 +19,11 @@ from services.sbom_parser import (
 from services.sbom_parser import extract, classify, parse_github_url
 from services.component_search import search_component, build_component_graph
 from utils.tools import get_trivy_path
+from routers.cve_routes import router as cve_router
 
 router = APIRouter()
+
+router.include_router(cve_router)
 
 # ============================================================
 # Gestore per rimuovere file in sola lettura durante la pulizia della cartella di storage
