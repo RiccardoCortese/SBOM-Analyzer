@@ -19,9 +19,11 @@ from services.sbom_parser import (
 )
 from services.component_search import search_component, build_component_graph
 from utils.tools import get_trivy_path
+from routers.cve_routes import router as cve_router
 
 router = APIRouter()
 
+router.include_router(cve_router)
 # ============================================================
 # Gestore per rimuovere file in sola lettura durante la pulizia della cartella di storage
 # ============================================================
@@ -405,7 +407,7 @@ def scan_merged_sbom():
     trivy_exe = get_trivy_path()
 
     if not os.path.exists(trivy_exe):
-        raise HTTPException( status_code=500, detail="Trivy non trovato.")
+        raise HTTPException(status_code=500, detail="Trivy non trovato.")
 
 
     # output report vulnerabilità
@@ -433,16 +435,16 @@ def scan_merged_sbom():
 
     except subprocess.CalledProcessError as e:
 
-        raise HTTPException( status_code=500, detail=f"Errore durante scansione Trivy: {e.stderr}")
+        raise HTTPException(status_code=500, detail=f"Errore durante scansione Trivy: {e.stderr}")
 
     # controllo output
     if not os.path.exists(vulnerability_report):
 
-        raise HTTPException( status_code=500, detail="Report Trivy non generato.")
+        raise HTTPException(status_code=500, detail="Report Trivy non generato.")
 
 
     # carica risultato
-    with open( vulnerability_report, "r", encoding="utf-8") as f:
+    with open(vulnerability_report, "r", encoding="utf-8") as f:
         report = json.load(f)
 
 
