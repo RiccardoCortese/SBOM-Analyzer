@@ -20,7 +20,7 @@ from services.sbom_parser import (
 from services.component_search import search_component, build_component_graph
 from utils.tools import get_trivy_path
 from routers.cve_routes import router as cve_router
-from routers.cve_routes import get_nvd_severity
+from routers.cve_routes import get_nvd_cves_batch
 
 router = APIRouter()
 
@@ -398,21 +398,35 @@ def merge_artifacts():
 def scan_merged_sbom():
 
     # SBOM generato dal merge precedente
-    final_sbom = os.path.join( STORAGE_DIR, "final_merged_sbom.json")
+    final_sbom = os.path.join(
+        STORAGE_DIR,
+        "final_merged_sbom.json"
+    )
 
     if not os.path.exists(final_sbom):
-        raise HTTPException(status_code=404, detail="SBOM finale non trovato. Eseguire prima il merge.")
+
+        raise HTTPException(
+            status_code=404,
+            detail="SBOM finale non trovato. Eseguire prima il merge."
+        )
 
 
     # percorso trivy
     trivy_exe = get_trivy_path()
 
     if not os.path.exists(trivy_exe):
-        raise HTTPException(status_code=500, detail="Trivy non trovato.")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Trivy non trovato."
+        )
 
 
     # output report vulnerabilità
-    vulnerability_report = os.path.join(STORAGE_DIR, "trivy_vulnerabilities.json")
+    vulnerability_report = os.path.join(
+        STORAGE_DIR,
+        "trivy_vulnerabilities.json"
+    )
 
     command = [
         trivy_exe,
@@ -433,34 +447,130 @@ def scan_merged_sbom():
             text=True
         )
 
-
     except subprocess.CalledProcessError as e:
 
-        raise HTTPException(status_code=500, detail=f"Errore durante scansione Trivy: {e.stderr}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Errore durante scansione Trivy: {e.stderr}"
+        )
+
 
     # controllo output
     if not os.path.exists(vulnerability_report):
 
-        raise HTTPException(status_code=500, detail="Report Trivy non generato.")
+        raise HTTPException(
+            status_code=500,
+            detail="Report Trivy non generato."
+        )
 
 
     # carica risultato
-    with open(vulnerability_report, "r", encoding="utf-8") as f:
+    with open(
+        vulnerability_report,
+        "r",
+        encoding="utf-8"
+    ) as f:
+
         report = json.load(f)
-        
-        
+
+
+    # ==========================================================
+    # RECUPERO SEVERITY NVD IN BATCH
+    # ==========================================================
+
+    cve_ids = []
+
     for result in report.get("Results", []):
+
         for vuln in result.get("Vulnerabilities", []):
+
+            cve_id = vuln.get("VulnerabilityID")
+
+            if cve_id and cve_id.startswith("CVE-"):
+
+                cve_ids.append(cve_id.upper())
+
+
+    cve_ids = list(set(cve_ids))
+
+
+    # Una sola richiesta batch a NVD
+    nvd_cves = get_nvd_cves_batch(cve_ids)
+
+
+    # ==========================================================
+    # COSTRUZIONE MAPPA CVE -> SEVERITY
+    # ==========================================================
+
+    nvd_severities = {}
+
+    for cve_id, cve in nvd_cves.items():
+
+        metrics = cve.get("metrics", {})
+
+        scores = []
+
+        for version in [
+            "cvssMetricV40",
+            "cvssMetricV31",
+            "cvssMetricV30"
+        ]:
+
+            for metric in metrics.get(version, []):
+
+                if metric.get("source") == "nvd@nist.gov":
+
+                    score = metric.get(
+                        "cvssData",
+                        {}
+                    ).get("baseScore")
+
+                    if score is not None:
+
+                        scores.append(score)
+
+
+        if scores:
+
+            score = max(scores)
+
+            if score >= 9.0:
+                severity = "CRITICAL"
+
+            elif score >= 7.0:
+                severity = "HIGH"
+
+            elif score >= 4.0:
+                severity = "MEDIUM"
+
+            elif score > 0:
+                severity = "LOW"
+
+            else:
+                severity = "NONE"
+
+            nvd_severities[cve_id] = severity
+
+
+    # ==========================================================
+    # AGGIUNTA NVD SEVERITY AL REPORT
+    # ==========================================================
+
+    for result in report.get("Results", []):
+
+        for vuln in result.get("Vulnerabilities", []):
+
             cve_id = vuln.get("VulnerabilityID")
 
             if cve_id:
-                nvd_severity = get_nvd_severity(cve_id)
 
-                vuln["NVDSeverity"] = (
-                    nvd_severity
-                    if nvd_severity
-                    else vuln.get("Severity", "UNKNOWN")
+                cve_id = cve_id.upper()
+
+                vuln["NVDSeverity"] = nvd_severities.get(
+                    cve_id,
+                    vuln.get("Severity", "UNKNOWN")
                 )
+
 
     return {
         "status": "success",
@@ -468,7 +578,6 @@ def scan_merged_sbom():
         "report": vulnerability_report,
         "data": report
     }
-
 # ============================================================
 # GENERAZIONE GRAFI PER TUTTI I FILE TROVATI NELLA CARTELLA STORAGE (manifests e dependencies)
 # ============================================================
