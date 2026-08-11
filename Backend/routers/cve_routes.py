@@ -9,65 +9,123 @@ router = APIRouter()
 # ==========================================================
 # CACHE NVD
 # ==========================================================
-
 @lru_cache(maxsize=500)
 def get_nvd_cve(cve_id: str):
 
     nvd_url = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 
     try:
-        response = requests.get(nvd_url, params={"cveIds": cve_id}, timeout=30)
 
-    except requests.RequestException:
+        response = requests.get(
+            nvd_url,
+            params={"cveIds": cve_id},
+            timeout=30
+        )
+
+    except requests.RequestException as e:
+
+        print(
+            f"Errore connessione NVD per {cve_id}: {e}",
+            flush=True
+        )
+
         return None
 
     if response.status_code != 200:
+
+        print(
+            f"NVD HTTP {response.status_code} per {cve_id}: "
+            f"{response.text[:500]}",
+            flush=True
+        )
+
         return None
 
-    data = response.json()
+    try:
+
+        data = response.json()
+
+    except ValueError as e:
+
+        print(
+            f"Risposta NVD non valida per {cve_id}: {e}",
+            flush=True
+        )
+
+        return None
+
     vulnerabilities = data.get("vulnerabilities", [])
 
     if not vulnerabilities:
+
+        print(
+            f"CVE {cve_id} non presente nella risposta NVD",
+            flush=True
+        )
+
         return None
 
     return vulnerabilities[0]["cve"]
 
-def get_nvd_severity(cve_id):
-    cve = get_nvd_cve(cve_id)
 
-    if not cve:
-        return None
+def get_nvd_cves_batch(cve_ids):
 
-    metrics = cve.get("metrics", {})
+    nvd_url = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 
-    scores = []
+    try:
 
-    for version in ["cvssMetricV40", "cvssMetricV31", "cvssMetricV30"]:
-        for metric in metrics.get(version, []):
-            if metric.get("source") == "nvd@nist.gov":
-                score = metric.get("cvssData", {}).get("baseScore")
+        response = requests.get(
+            nvd_url,
+            params={"cveIds": ",".join(cve_ids)},
+            timeout=60
+        )
 
-                if score is not None:
-                    scores.append(score)
+    except requests.RequestException as e:
 
-    if not scores:
-        return None
+        print(
+            f"Errore connessione NVD: {e}",
+            flush=True
+        )
 
-    score = max(scores)
+        return {}
 
-    if score >= 9.0:
-        return "CRITICAL"
+    if response.status_code == 429:
 
-    if score >= 7.0:
-        return "HIGH"
+        print(
+            "NVD HTTP 429: rate limit raggiunto.",
+            flush=True
+        )
 
-    if score >= 4.0:
-        return "MEDIUM"
+        return {}
 
-    if score > 0:
-        return "LOW"
+    if response.status_code != 200:
 
-    return "NONE"
+        print(
+            f"NVD HTTP {response.status_code}: "
+            f"{response.text[:500]}",
+            flush=True
+        )
+
+        return {}
+
+    try:
+
+        data = response.json()
+
+    except ValueError as e:
+
+        print(
+            f"Risposta NVD non valida: {e}",
+            flush=True
+        )
+
+        return {}
+
+    return {
+        item["cve"]["id"]: item["cve"]
+        for item in data.get("vulnerabilities", [])
+    }
+
 
 # ==========================================================
 # CVSS
