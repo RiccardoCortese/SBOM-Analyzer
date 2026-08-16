@@ -45,6 +45,8 @@ def render_config_target(backend_url: str):
             placeholder="es. myrepo/myimage:latest"
         )
         
+        st.session_state.config_docker_image_tag = docker_image_tag  # Salviamo il tag dell'immagine nello stato della sessione
+        
         # Tipo di vulnerabilità da scansionare con Trivy
         vuln_type = st.selectbox(
             "Seleziona cosa scansionare nell'immagine Docker:",
@@ -61,7 +63,7 @@ def render_config_target(backend_url: str):
         )
         st.info(" Verrà inviato questo target alla pipeline remota di GitHub Actions.")
 
-
+        st.session_state.config_vuln_type = vuln_type  # Salviamo il tipo di vulnerabilità nello stato della sessione
     if st.button("🔄 Invia e Avvia Discovery"):
         if not repo_url:
             st.error("Inserisci la URL della repo.")
