@@ -93,8 +93,8 @@ def render_docker_section(backend_url: str):
     current_docker_report = current_results.get("docker_report", {})
 
     # Rendering dei risultati dinamici basati sullo stato aggiornato
-    if st.session_state.docker_analyzed and current_docker_report and current_docker_report.get("total_docker_packages", 0) > 0:
-        
+    #if st.session_state.docker_analyzed and current_docker_report and current_docker_report.get("total_docker_packages", 0) > 0:
+    if st.session_state.docker_analyzed and current_docker_report:    
         st.markdown("#### 📊 Statistiche e Deviazioni dell'Immagine Docker")
         
         kpi1, kpi2, kpi3, kpi4, kpi5, kpi6 = st.columns(6)

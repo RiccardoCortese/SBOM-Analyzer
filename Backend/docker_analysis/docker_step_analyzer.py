@@ -55,30 +55,95 @@ class DockerStepAnalyzer:
         parser = DockerfileParser()
         parser.content = self.dockerfile_content
 
-
         current_lines = []
-
         step_index = 0
 
-
+        # Indica se stiamo raccogliendo un heredoc
+        heredoc = False
+        heredoc_delimiter = None
+        heredoc_instruction = None
+        heredoc_value = None
 
         for inst in parser.structure:
 
             instruction = inst["instruction"].upper()
             value = inst["value"].strip()
 
+            # ========================================================
+            # HEREDOC
+            # ========================================================
 
-            # ignora commenti del parser
+            if heredoc:
+
+                current_lines.append(
+                    inst["content"].rstrip("\n")
+                )
+
+                # Fine heredoc
+                if instruction == heredoc_delimiter:
+
+                    heredoc = False
+
+                    step = DockerStep(
+                        index=step_index,
+                        instruction=heredoc_instruction,
+                        command=self._normalize_command(
+                            heredoc_value
+                        ),
+                        dockerfile_content="\n".join(current_lines),
+                        image_tag=f"sbom-analysis-step-{step_index}",
+                        filesystem_change=self._changes_filesystem(
+                            heredoc_instruction
+                        )
+                    )
+
+                    self.steps.append(step)
+
+                    step_index += 1
+
+                    heredoc_delimiter = None
+                    heredoc_instruction = None
+                    heredoc_value = None
+
+                continue
+
+            # ========================================================
+            # COMMENTI
+            # ========================================================
+
             if instruction == "COMMENT":
                 continue
 
+            # ========================================================
+            # INIZIO HEREDOC
+            # ========================================================
 
-            # Ignora istruzioni non interessanti
-            #if instruction not in tracked_instructions:
-            #    continue
+            if "<<" in value:
 
+                import re
 
-            # Ricostruzione Dockerfile progressivo
+                match = re.search(
+                    r"<<-?\s*[\"']?([A-Za-z_][A-Za-z0-9_]*)[\"']?",
+                    value
+                )
+
+                if match:
+
+                    heredoc = True
+                    heredoc_delimiter = match.group(1)
+                    heredoc_instruction = instruction
+                    heredoc_value = value
+
+                    current_lines.append(
+                        inst["content"].rstrip("\n")
+                    )
+
+                    continue
+
+            # ========================================================
+            # ISTRUZIONE NORMALE
+            # ========================================================
+
             current_lines.append(
                 self._format_instruction(
                     instruction,
@@ -86,38 +151,22 @@ class DockerStepAnalyzer:
                 )
             )
 
-
-            command = self._normalize_command(value)
-
-
             step = DockerStep(
-
                 index=step_index,
-
                 instruction=instruction,
-
-                command=command,
-
-                dockerfile_content="\n".join(
-                    current_lines
-                ),
-
+                command=self._normalize_command(value),
+                dockerfile_content="\n".join(current_lines),
                 image_tag=f"sbom-analysis-step-{step_index}",
-
                 filesystem_change=self._changes_filesystem(
                     instruction
                 )
             )
 
-
             self.steps.append(step)
-
 
             step_index += 1
 
-
         return self.steps
-
 
 
     def _normalize_command(self, command: str) -> str:

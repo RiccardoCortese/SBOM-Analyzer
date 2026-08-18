@@ -465,6 +465,7 @@ def get_docker_analysis(dockerfile_content, build_context):
         # ==========================
 
         diffs = []
+        removed_components = []
 
         for i in range(1, len(sbom_paths)):
 

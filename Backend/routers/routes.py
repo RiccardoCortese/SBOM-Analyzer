@@ -86,7 +86,7 @@ async def upload_sbom(
             if dockerfile_path:
                 dockerfile_full_path = os.path.join(tmp_clone, dockerfile_path)
                 if os.path.exists(dockerfile_full_path):
-                    with open(dockerfile_full_path, "r") as df:
+                    with open(dockerfile_full_path, "r", encoding="utf-8") as df:
                         docker_content = df.read()
             
             if not found_files:

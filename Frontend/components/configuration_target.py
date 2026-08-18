@@ -39,14 +39,16 @@ def render_config_target(backend_url: str):
     elif docker_choice == "Genera SBOM Docker":
         # Se l'utente sceglie di generare lo SBOM Docker, mostriamo i campi per il tag dell'immagine e il tipo di vulnerabilità da scansionare
             
-        st.config_docker_image_tag = st.text_input(
+        docker_image_tag  = st.text_input(
             "Tag Immagine / Nome Dockerfile custom:",
             value="stfbk/tlsassistant:v3.2-dev3",
             placeholder="es. myrepo/myimage:latest"
         )
         
+        st.session_state.config_docker_image_tag = docker_image_tag  # Salviamo il tag dell'immagine nello stato della sessione
+        
         # Tipo di vulnerabilità da scansionare con Trivy
-        st.config_vuln_type = st.selectbox(
+        vuln_type  = st.selectbox(
             "Seleziona cosa scansionare nell'immagine Docker:",
             
             options=["os,library", "os", "library"],
@@ -61,6 +63,7 @@ def render_config_target(backend_url: str):
         )
         st.info(" Verrà inviato questo target alla pipeline remota di GitHub Actions.")
 
+        st.session_state.config_vuln_type = vuln_type  # Salviamo il tipo di vulnerabilità nello stato della sessione
 
     if st.button("🔄 Invia e Avvia Discovery"):
         if not repo_url:
