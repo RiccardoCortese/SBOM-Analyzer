@@ -345,7 +345,7 @@ def get_docker_analysis(dockerfile_content, build_context):
             # Costruzione immagine dello step
             image = builder.build(step)
 
-            print( "Creata immagine:", image )
+            print("Creata immagine:", image)
 
             step.image_tag = image
             

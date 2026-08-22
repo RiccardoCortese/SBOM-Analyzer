@@ -77,8 +77,10 @@ def render_docker_sbom_analysis(steps, diffs, artifacts, yara_results):
                                             st.write(f"Match: {yara['match']}")
                                         else:
                                             st.write(f"✅ Nessuna minaccia rilevata da YARA in questo step.")
+                                            break
                                     else:
                                         st.write(f"Non eseguito YARA in questo step.")
+                                        break
                             else:
                                 st.write(f"✅ Nessuna minaccia rilevata da YARA in questo step.")
                             st.divider()
