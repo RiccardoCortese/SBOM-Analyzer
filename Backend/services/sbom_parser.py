@@ -340,7 +340,7 @@ def get_docker_analysis(dockerfile_content, build_context):
         previous_filesystem = None
         filesystem_path = None
         # per test solo i primi 8 step
-        #steps = steps[:8]
+        steps = steps[:8]
         for step in steps:
 
             # Costruzione immagine dello step
