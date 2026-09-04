@@ -2,6 +2,58 @@ import streamlit as st
 import requests
 import json
 import pandas as pd
+import re
+
+def format_source_files(files):
+    normal_files = set()
+    steps = []
+
+    for file_data in files:
+        if isinstance(file_data, dict):
+            file = file_data.get("source", "")
+        else:
+            file = file_data
+
+        if not file:
+            continue
+
+        match = re.search(r"step_(\d+)_sbom\.json", file, re.IGNORECASE)
+
+        if match:
+            steps.append(int(match.group(1)))
+        else:
+            normal_files.add(file)
+
+    result = []
+
+    if normal_files:
+        result.append("File: " + ", ".join(sorted(normal_files)))
+
+    if steps:
+        steps = sorted(set(steps))
+        ranges = []
+        start = end = steps[0]
+
+        for step in steps[1:]:
+            if step == end + 1:
+                end = step
+            else:
+                ranges.append((start, end))
+                start = end = step
+
+        ranges.append((start, end))
+
+        formatted_steps = []
+
+        for start, end in ranges:
+            if start == end:
+                formatted_steps.append(f"Step {start}")
+            else:
+                formatted_steps.append(f"Step {start}–{end}")
+
+        result.append("Dockerfile: " + ", ".join(formatted_steps))
+
+    return " | ".join(result)
 
 def render_docker_section(backend_url: str):
     st.subheader("Sezione di Analisi Immagine Docker")
@@ -139,18 +191,29 @@ def render_docker_section(backend_url: str):
                     use_container_width=True
                 )
         
-
+        with st.expander(f"📌 Pacchetti totali nel Docker ({current_docker_report.get('total_docker_packages', 0)})"):
+            if current_docker_report.get("docker_components"):
+                data = []
+                for item in current_docker_report["docker_components"]:
+                    data.append({
+                        "Componente": item["name"],
+                        "Versione": item["version"],
+                        "PURL": item.get("purl", "-")
+                    })
+                st.dataframe(pd.DataFrame(data), use_container_width=True)
+            else:
+                st.info("Nessun pacchetto rilevato.")
+        
         with st.expander(f"✅ Pacchetti comuni tra Docker e Sorgente ({current_docker_report.get('packages_in_common_count', 0)})"):
             if current_docker_report.get("in_common"):
                 
                 data = []
                 for item in current_docker_report["in_common"]:
-                    sources = [f["source"] for f in item.get("source_files", [])]
                     data.append({
                         "Componente": item["name"],
                         "Versione": item["version"],
                         "PURL": item.get("purl", "-"),
-                        "File Sorgente (oltre a immagine docker)": ", ".join(sources)
+                        "File Sorgente (oltre a immagine docker)": format_source_files(item.get("source_files", []))
                     })
                 st.dataframe(pd.DataFrame(data), use_container_width=True)
             else:
@@ -158,7 +221,7 @@ def render_docker_section(backend_url: str):
         
         
         with st.expander(f"⚠️ Pacchetti solo dentro l'Immagine Docker ({current_docker_report.get('packages_only_in_docker_count', 0)})"):
-            st.info("Questa sezione mostra i pacchetti presenti solo nell'immagine Docker.")
+            st. info("Questa sezione mostra i pacchetti presenti solo nell'immagine Docker.")
             
             if current_docker_report.get("only_in_docker"):
                 data = []
@@ -181,7 +244,7 @@ def render_docker_section(backend_url: str):
                         "Componente": m["docker"]["name"],
                         "Versione Docker": m["docker"].get("version", "-"),
                         "Versione Sorgente": m.get("code_version", "-"),
-                        "File Sorgente": ", ".join([f["source"] for f in m.get("source_files", [])])
+                        "File Sorgente": format_source_files(m.get("source_files", []))
                     } for m in mismatches
                 ])
                 st.dataframe(df_mismatch, use_container_width=True)
@@ -199,7 +262,7 @@ def render_docker_section(backend_url: str):
                         "Componente": m.get("name", "-"),
                         "Versione Sorgente": m.get("version", "-"),
                         "PURL": m.get("purl", "-"),
-                        "File Sorgente (oltre a immagine docker)": ", ".join(m.get("files", []))
+                        "File Sorgente (oltre a immagine docker)": format_source_files(m.get("files", []))
                     } for m in missing_in_docker
                 ])
                 st.dataframe(df_missing, use_container_width=True)

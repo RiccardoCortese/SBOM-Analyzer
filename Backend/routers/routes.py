@@ -776,6 +776,7 @@ def generate_docker_sbom(
                 only_in_docker.append(dc)
                 
     # Ordiniamo i risultati per nome in modo case-insensitive per una visualizzazione più ordinata nel frontend
+    docker_components_unique = sorted(docker_components_unique, key=lambda x: x["name"].lower())
     in_common = sorted(in_common, key=lambda x: x["name"].lower())
     only_in_docker = sorted(only_in_docker, key=lambda x: x["name"].lower())
     version_mismatches = sorted(version_mismatches, key=lambda x: x["docker"]["name"].lower())
@@ -818,6 +819,7 @@ def generate_docker_sbom(
         "packages_with_version_mismatches_count": len(version_mismatches),
         "packages_missing_in_docker_count": len(missing_in_docker),
         "total_unique_docker_packages": len(docker_components_unique),
+        "docker_components": docker_components,
         "in_common": in_common,
         "only_in_docker": only_in_docker,
         "version_mismatches": version_mismatches,
