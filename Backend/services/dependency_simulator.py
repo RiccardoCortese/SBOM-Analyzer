@@ -80,13 +80,17 @@ def get_package_name_from_purl(purl):
 
 def resolve_pypi_package(name, version):
 
-    report = {}
-
     with tempfile.TemporaryDirectory() as temp_dir:
 
         report_path = os.path.join(temp_dir, "pip_report.json")
 
         command = [
+            "docker",
+            "run",
+            "--rm",
+            "-v",
+            f"{temp_dir}:/simulation",
+            "python:3.12-slim",
             "python",
             "-m",
             "pip",
@@ -95,7 +99,7 @@ def resolve_pypi_package(name, version):
             "--dry-run",
             "--ignore-installed",
             "--report",
-            report_path
+            "/simulation/pip_report.json"
         ]
 
         try:
@@ -109,19 +113,31 @@ def resolve_pypi_package(name, version):
 
         except subprocess.TimeoutExpired:
 
-            return {"success": False, "error": "Timeout durante la risoluzione delle dipendenze."}
+            return {
+                "success": False,
+                "error": "Timeout durante la risoluzione delle dipendenze Python."
+            }
 
         except Exception as e:
 
-            return {"success": False, "error": str(e)}
+            return {
+                "success": False,
+                "error": str(e)
+            }
 
         if result.returncode != 0:
 
-            return {"success": False, "error": result.stderr}
+            return {
+                "success": False,
+                "error": result.stderr
+            }
 
         if not os.path.exists(report_path):
 
-            return {"success": False, "error": "pip non ha prodotto il report."}
+            return {
+                "success": False,
+                "error": "pip non ha prodotto il report."
+            }
 
         try:
 
@@ -130,7 +146,10 @@ def resolve_pypi_package(name, version):
 
         except Exception as e:
 
-            return {"success": False, "error": f"Errore lettura report pip: {e}"}
+            return {
+                "success": False,
+                "error": f"Errore lettura report pip: {e}"
+            }
 
     packages = {}
 
@@ -154,7 +173,6 @@ def resolve_pypi_package(name, version):
         "packages": packages
     }
 
-
 # ============================================================
 # NPM
 # ============================================================
@@ -164,7 +182,6 @@ def resolve_npm_package(name, version):
     with tempfile.TemporaryDirectory() as temp_dir:
 
         package_json = os.path.join(temp_dir, "package.json")
-
         package_lock = os.path.join(temp_dir, "package-lock.json")
 
         package_data = {
@@ -182,12 +199,18 @@ def resolve_npm_package(name, version):
                 json.dump(package_data, f, indent=2)
 
             command = [
+                "docker",
+                "run",
+                "--rm",
+                "-v",
+                f"{temp_dir}:/simulation",
+                "node:22-slim",
                 "npm",
                 "install",
                 "--package-lock-only",
                 "--ignore-scripts",
                 "--prefix",
-                temp_dir
+                "/simulation"
             ]
 
             result = subprocess.run(
@@ -198,27 +221,49 @@ def resolve_npm_package(name, version):
             )
 
         except subprocess.TimeoutExpired:
-            return {"success": False, "error": "Timeout durante la risoluzione npm."}
+
+            return {
+                "success": False,
+                "error": "Timeout durante la risoluzione npm."
+            }
 
         except Exception as e:
-            return {"success": False, "error": str(e)}
+
+            return {
+                "success": False,
+                "error": str(e)
+            }
 
         if result.returncode != 0:
-            return {"success": False,"error": result.stderr}
+
+            return {
+                "success": False,
+                "error": result.stderr
+            }
 
         if not os.path.exists(package_lock):
-            return {"success": False, "error": "npm non ha prodotto package-lock.json."}
+
+            return {
+                "success": False,
+                "error": "npm non ha prodotto package-lock.json."
+            }
 
         try:
+
             with open(package_lock, "r", encoding="utf-8") as f:
                 lock = json.load(f)
 
         except Exception as e:
-            return {"success": False, "error": f"Errore lettura package-lock: {e}"}
+
+            return {
+                "success": False,
+                "error": f"Errore lettura package-lock: {e}"
+            }
 
     packages = {}
 
     for path, data in lock.get("packages", {}).items():
+
         if not path.startswith("node_modules/"):
             continue
 
@@ -233,7 +278,6 @@ def resolve_npm_package(name, version):
         "success": True,
         "packages": packages
     }
-
 # ============================================================
 # MAVEN
 # ============================================================
