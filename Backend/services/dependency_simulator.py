@@ -80,13 +80,17 @@ def get_package_name_from_purl(purl):
 
 def resolve_pypi_package(name, version):
 
-    report = {}
-
     with tempfile.TemporaryDirectory() as temp_dir:
 
         report_path = os.path.join(temp_dir, "pip_report.json")
 
         command = [
+            "docker",
+            "run",
+            "--rm",
+            "-v",
+            f"{temp_dir}:/simulation",
+            "python:3.12-slim",
             "python",
             "-m",
             "pip",
@@ -95,7 +99,7 @@ def resolve_pypi_package(name, version):
             "--dry-run",
             "--ignore-installed",
             "--report",
-            report_path
+            "/simulation/pip_report.json"
         ]
 
         try:
@@ -109,19 +113,31 @@ def resolve_pypi_package(name, version):
 
         except subprocess.TimeoutExpired:
 
-            return {"success": False, "error": "Timeout durante la risoluzione delle dipendenze."}
+            return {
+                "success": False,
+                "error": "Timeout durante la risoluzione delle dipendenze Python."
+            }
 
         except Exception as e:
 
-            return {"success": False, "error": str(e)}
+            return {
+                "success": False,
+                "error": str(e)
+            }
 
         if result.returncode != 0:
 
-            return {"success": False, "error": result.stderr}
+            return {
+                "success": False,
+                "error": result.stderr
+            }
 
         if not os.path.exists(report_path):
 
-            return {"success": False, "error": "pip non ha prodotto il report."}
+            return {
+                "success": False,
+                "error": "pip non ha prodotto il report."
+            }
 
         try:
 
@@ -130,7 +146,10 @@ def resolve_pypi_package(name, version):
 
         except Exception as e:
 
-            return {"success": False, "error": f"Errore lettura report pip: {e}"}
+            return {
+                "success": False,
+                "error": f"Errore lettura report pip: {e}"
+            }
 
     packages = {}
 
@@ -154,7 +173,6 @@ def resolve_pypi_package(name, version):
         "packages": packages
     }
 
-
 # ============================================================
 # NPM
 # ============================================================
@@ -164,7 +182,6 @@ def resolve_npm_package(name, version):
     with tempfile.TemporaryDirectory() as temp_dir:
 
         package_json = os.path.join(temp_dir, "package.json")
-
         package_lock = os.path.join(temp_dir, "package-lock.json")
 
         package_data = {
@@ -179,16 +196,21 @@ def resolve_npm_package(name, version):
         try:
 
             with open(package_json, "w", encoding="utf-8") as f:
-
                 json.dump(package_data, f, indent=2)
 
             command = [
+                "docker",
+                "run",
+                "--rm",
+                "-v",
+                f"{temp_dir}:/simulation",
+                "node:22-slim",
                 "npm",
                 "install",
                 "--package-lock-only",
                 "--ignore-scripts",
                 "--prefix",
-                temp_dir
+                "/simulation"
             ]
 
             result = subprocess.run(
@@ -200,29 +222,43 @@ def resolve_npm_package(name, version):
 
         except subprocess.TimeoutExpired:
 
-            return {"success": False, "error": "Timeout durante la risoluzione npm."}
+            return {
+                "success": False,
+                "error": "Timeout durante la risoluzione npm."
+            }
 
         except Exception as e:
 
-            return {"success": False, "error": str(e)}
+            return {
+                "success": False,
+                "error": str(e)
+            }
 
         if result.returncode != 0:
 
-            return {"success": False,"error": result.stderr}
+            return {
+                "success": False,
+                "error": result.stderr
+            }
 
         if not os.path.exists(package_lock):
 
-            return {"success": False, "error": "npm non ha prodotto package-lock.json."}
+            return {
+                "success": False,
+                "error": "npm non ha prodotto package-lock.json."
+            }
 
         try:
 
             with open(package_lock, "r", encoding="utf-8") as f:
-
                 lock = json.load(f)
 
         except Exception as e:
 
-            return {"success": False, "error": f"Errore lettura package-lock: {e}"}
+            return {
+                "success": False,
+                "error": f"Errore lettura package-lock: {e}"
+            }
 
     packages = {}
 
@@ -242,7 +278,6 @@ def resolve_npm_package(name, version):
         "success": True,
         "packages": packages
     }
-
 # ============================================================
 # MAVEN
 # ============================================================
@@ -262,7 +297,6 @@ def resolve_maven_package(name, version):
         # ----------------------------------------------------
 
         if ":" not in name:
-
             return {
                 "success": False,
                 "error": f"Nome Maven non valido: {name}"
@@ -296,13 +330,7 @@ def resolve_maven_package(name, version):
 """
 
         try:
-
-            with open(
-                pom_path,
-                "w",
-                encoding="utf-8"
-            ) as f:
-
+            with open(pom_path, "w", encoding="utf-8") as f:
                 f.write(pom)
 
             command = [
@@ -406,10 +434,7 @@ def resolve_maven_package(name, version):
         # \- org.hamcrest:hamcrest-core:jar:1.3:compile
         # ----------------------------------------------------
 
-        if not (
-            line.startswith("+-")
-            or line.startswith("\\-")
-        ):
+        if not (line.startswith("+-") or line.startswith("\\-")):
             continue
 
         dependency = line[2:].strip()
@@ -469,19 +494,11 @@ def resolve_maven_package(name, version):
             )
         }
 
-    print(
-        f"[DEBUG MAVEN] {name}={version} "
-        f"risolte {len(packages)} dipendenze:",
-        flush=True
-    )
+    print(f"[DEBUG MAVEN] {name}={version} risolte {len(packages)} dipendenze:", flush=True)
 
     for package_name, package_data in sorted(packages.items()):
 
-        print(
-            f"{package_data['name']} -> "
-            f"{package_data['version']}",
-            flush=True
-        )
+        print(f"{package_data['name']} -> {package_data['version']}", flush=True)
 
     return {
         "success": True,
@@ -614,10 +631,7 @@ def resolve_deb_package(name, version, purl, resolve_versions=False):
             )
         ]
 
-        print(
-            f"[DEBUG DEB] Avvio risoluzione: {' '.join(command)}",
-            flush=True
-        )
+        print(f"[DEBUG DEB] Avvio risoluzione: {' '.join(command)}", flush=True)
 
         result = subprocess.run(
             command,
@@ -722,11 +736,7 @@ def resolve_deb_package(name, version, purl, resolve_versions=False):
 
     if resolve_versions:
 
-        print(
-            f"[DEBUG DEB] Risoluzione versioni di "
-            f"{len(packages)} pacchetti...",
-            flush=True
-        )
+        print(f"[DEBUG DEB] Risoluzione versioni di {len(packages)} pacchetti...", flush=True)
 
         # --------------------------------------------------------
         # Costruisce un unico comando da eseguire nel container
@@ -773,35 +783,18 @@ def resolve_deb_package(name, version, purl, resolve_versions=False):
                 
                 if policy_result.returncode != 0:
 
-                    print(
-                        f"[DEBUG DEB] policy FALLITA "
-                        f"{package_data['name']}:{arch}",
-                        flush=True
-                    )
+                    print( f"[DEBUG DEB] policy FALLITA {package_data['name']}:{arch}", flush=True)
 
-                    print(
-                        f"[DEBUG DEB] stderr: {policy_result.stderr}",
-                        flush=True
-                    )
+                    print(f"[DEBUG DEB] stderr: {policy_result.stderr}", flush=True)
 
 
-                print(
-                    f"[DEBUG DEB] policy {package_data['name']}:",
-                    flush=True
-                )
+                print(f"[DEBUG DEB] policy {package_data['name']}:", flush=True)
 
-                print(
-                    policy_result.stdout,
-                    flush=True
-                )
+                print(policy_result.stdout, flush=True)
 
             except subprocess.TimeoutExpired:
 
-                print(
-                    "[DEBUG DEB] Timeout durante "
-                    "la risoluzione delle versioni.",
-                    flush=True
-                )
+                print("[DEBUG DEB] Timeout durante la risoluzione delle versioni.", flush=True)
 
                 policy_result = None
 
@@ -818,15 +811,9 @@ def resolve_deb_package(name, version, purl, resolve_versions=False):
                         current_package = line[4:].strip()
                         continue
 
-                    if (
-                        current_package
-                        and line.startswith("Candidate:")
-                    ):
+                    if (current_package and line.startswith("Candidate:")):
 
-                        candidate = line.split(
-                            ":",
-                            1
-                        )[1].strip()
+                        candidate = line.split(":", 1)[1].strip()
 
                         if candidate != "(none)":
 
@@ -834,24 +821,12 @@ def resolve_deb_package(name, version, purl, resolve_versions=False):
 
                         current_package = None
 
-        print(
-            "[DEBUG DEB] Risoluzione versioni completata.",
-            flush=True
-        )
+        print("[DEBUG DEB] Risoluzione versioni completata.", flush=True)
 
-    print(
-        f"[DEBUG DEB] {name}={full_version} "
-        f"risolte {len(packages)} dipendenze:",
-        flush=True
-    )
+    print(f"[DEBUG DEB] {name}={full_version} risolte {len(packages)} dipendenze:", flush=True)
 
     for package_name, package_data in sorted(packages.items()):
-
-        print(
-            f"{package_name} -> "
-            f"{package_data['version']}",
-            flush=True
-        )
+        print(f"{package_name} -> {package_data['version']}",flush=True)
 
     return {
         "success": True,
@@ -868,27 +843,21 @@ def resolve_target_package(purl, version, resolve_versions=False):
     name = get_package_name_from_purl(purl)
 
     if not ecosystem:
-
         return {"success": False, "error": f"Ecosistema non supportato: {purl}"}
 
     if not name:
-
         return {"success": False, "error": f"Nome pacchetto non ricavabile dal PURL: {purl}"}
 
     if ecosystem == "pypi":
-
         return resolve_pypi_package(name, version)
 
     if ecosystem == "npm":
-
         return resolve_npm_package(name, version)
 
     if ecosystem == "deb":
-
         return resolve_deb_package(name, version, purl, resolve_versions=resolve_versions)
     
     if ecosystem == "maven":
-
         return resolve_maven_package(name, version)
     
     return {"success": False, "error": f"Ecosistema non supportato: {ecosystem}"}
@@ -900,7 +869,6 @@ def resolve_target_package(purl, version, resolve_versions=False):
 def get_current_packages(sbom_file, ecosystem):
 
     try:
-
         with open(sbom_file, "r", encoding="utf-8") as f:
             sbom = json.load(f)
 
@@ -951,23 +919,11 @@ def compare_dependencies(sbom_packages, current_dependencies, target_dependencie
 
     if target_name in current_dependencies:
 
-        current_version = (
-            current_dependencies
-            .get(target_name, {})
-            .get("version")
-        )
+        current_version = (current_dependencies.get(target_name, {}).get("version"))
 
-        target_version = (
-            target_dependencies
-            .get(target_name, {})
-            .get("version")
-        )
+        target_version = (target_dependencies.get(target_name, {}).get("version"))
 
-        if (
-            current_version is not None
-            and target_version is not None
-            and current_version != target_version
-        ):
+        if (current_version is not None and target_version is not None and current_version != target_version):
 
             changed.append({
                 "name": current_dependencies[target_name].get(
@@ -996,23 +952,11 @@ def compare_dependencies(sbom_packages, current_dependencies, target_dependencie
 
         # La versione attuale deve arrivare dalla risoluzione
         # della versione corrente, NON dallo SBOM.
-        current_version = (
-            current_dependencies
-            .get(name, {})
-            .get("version")
-        )
+        current_version = (current_dependencies.get(name, {}).get("version"))
 
-        target_version = (
-            target_dependencies
-            .get(name, {})
-            .get("version")
-        )
+        target_version = (target_dependencies.get(name, {}).get("version"))
 
-        package_name = (
-            current_dependencies
-            .get(name, {})
-            .get("name", name)
-        )
+        package_name = (current_dependencies.get(name, {}).get("name", name))
 
         # Se Maven non ha restituito una versione,
         # non possiamo fare un confronto affidabile.
@@ -1068,8 +1012,6 @@ def compare_dependencies(sbom_packages, current_dependencies, target_dependencie
 
         if not dependency:
             continue
-        
-        
 
         removed.append({
             "name": dependency.get("name", name),
@@ -1141,11 +1083,7 @@ def simulate_dependency_update(purl, current_version, target_version, sbom_file)
     # --------------------------------------------------------
 
     # Risolvo SOLO la struttura delle dipendenze attuali
-    current_result = resolve_target_package(
-        purl,
-        current_version,
-        resolve_versions=False
-    )
+    current_result = resolve_target_package(purl, current_version, resolve_versions=False)
 
     if not current_result["success"]:
         return {
@@ -1163,11 +1101,7 @@ def simulate_dependency_update(purl, current_version, target_version, sbom_file)
     # --------------------------------------------------------
 
     # Risolvo struttura + versioni candidate
-    target_result = resolve_target_package(
-        purl,
-        target_version,
-        resolve_versions=True
-    )
+    target_result = resolve_target_package(purl, target_version, resolve_versions=True)
 
     if not target_result["success"]:
         return target_result
@@ -1178,12 +1112,7 @@ def simulate_dependency_update(purl, current_version, target_version, sbom_file)
     # Confronto
     # --------------------------------------------------------
 
-    comparison = compare_dependencies(
-        current_packages,
-        current_dependencies,
-        target_dependencies,
-        package_name
-    )
+    comparison = compare_dependencies(current_packages, current_dependencies, target_dependencies, package_name)
     return {
         "success": True,
         "component": package_name,
