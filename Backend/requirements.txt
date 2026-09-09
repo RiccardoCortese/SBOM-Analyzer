@@ -1,6 +1,5 @@
 dockerfile_parse==2.0.1
-fastapi==0.140.0
-python-dotenv==1.2.2
+fastapi==0.141.1
+python-dotenv==1.2.3
 Requests==2.34.2
-uvicorn==0.51.0
-yara-python==4.5.4
+uvicorn==0.52.4
