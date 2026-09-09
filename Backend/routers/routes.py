@@ -35,114 +35,79 @@ def remove_readonly(func, path, excinfo):
     func(path)
 
 # ============================================================
-# ACQUISIZIONE E SALVATAGGIO IN MEMORIA SERVER di file JSON manuali o generati
+# ACQUISIZIONE E SALVATAGGIO IN MEMORIA SERVER di file JSON generati
 # ============================================================
 
 @router.post("/upload-sbom")
 async def upload_sbom(
-    action: str = Form(...),
-    mode: str = Form("manual"), # Default manuale
     repo_url: Optional[str] = Form(None), # Necessario per clonare
     branch: Optional[str] = Form(None), # Necessario per clonare
     dockerfile_path: Optional[str] = Form(None), # Necessario per clonare
-    requirements_file: Optional[UploadFile] = File(None),
-    poetry_file: Optional[UploadFile] = File(None),
-    docker_file: Optional[UploadFile] = File(None),
 ):
     # pulizia della cartella di storage per evitare conflitti con file precedenti
     if os.path.exists(STORAGE_DIR):
         shutil.rmtree(STORAGE_DIR, onerror=remove_readonly)
     os.makedirs(STORAGE_DIR, exist_ok=True)
     
-    # Se il mode è "docker", eseguiamo il discovery automatico dei file di dipendenze dal Dockerfile
-    if mode == "docker":
-        if not repo_url:
-            raise HTTPException(400, "URL repository mancante.")
-            
-        tmp_clone = os.path.join(STORAGE_DIR, "tmp_clone")
+    if not repo_url:
+        raise HTTPException(400, "URL repository mancante.")
+        
+    tmp_clone = os.path.join(STORAGE_DIR, "tmp_clone")
+    try:
         try:
-            try:
-                subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, repo_url, tmp_clone], check=True)
-            except subprocess.CalledProcessError:
-                subprocess.run(["git", "clone", "--depth", "1", repo_url, tmp_clone], check=True)
-                
-            found_files = []
-            # Questi sono i pattern di file "standard" che consideriamo validi per l'analisi delle dipendenze 
-            valid_patterns = ["requirements.txt", "pyproject.toml", "setup.py", "*.lock",  "dependencies.json"]
+            subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, repo_url, tmp_clone], check=True)
+        except subprocess.CalledProcessError:
+            subprocess.run(["git", "clone", "--depth", "1", repo_url, tmp_clone], check=True)
             
-            for root, _, files in os.walk(tmp_clone):
-                for f in files:
-                    if any(fnmatch.fnmatch(f, pattern) for pattern in valid_patterns):
-                        rel_path = os.path.relpath(root, tmp_clone).replace(os.sep, "_")
-                        dest_name = f"{rel_path}_{f}" if rel_path != "." else f
-                        shutil.copy(
-                            os.path.join(root, f),
-                            os.path.join(STORAGE_DIR, dest_name)
-                        )
-                        found_files.append(dest_name)
-                        
-            # Cerco il Dockerfile per estrarre i comandi di installazione e le immagini di base, prendendo il path da dockerfile_path
-            docker_content = None
-            if dockerfile_path:
-                dockerfile_full_path = os.path.join(tmp_clone, dockerfile_path)
-                if os.path.exists(dockerfile_full_path):
-                    with open(dockerfile_full_path, "r", encoding="utf-8") as df:
-                        docker_content = df.read()
+        found_files = []
+        # Questi sono i pattern di file "standard" che consideriamo validi per l'analisi delle dipendenze 
+        valid_patterns = ["requirements.txt", "pyproject.toml", "setup.py", "*.lock"]
+        
+        for root, _, files in os.walk(tmp_clone):
+            for f in files:
+                if any(fnmatch.fnmatch(f, pattern) for pattern in valid_patterns):
+                    rel_path = os.path.relpath(root, tmp_clone).replace(os.sep, "_")
+                    dest_name = f"{rel_path}_{f}" if rel_path != "." else f
+                    shutil.copy(
+                        os.path.join(root, f),
+                        os.path.join(STORAGE_DIR, dest_name)
+                    )
+                    found_files.append(dest_name)
+                    
+        # Cerco il Dockerfile per estrarre i comandi di installazione e le immagini di base, prendendo il path da dockerfile_path
+        docker_content = None
+        if dockerfile_path:
+            dockerfile_full_path = os.path.join(tmp_clone, dockerfile_path)
+            if os.path.exists(dockerfile_full_path):
+                with open(dockerfile_full_path, "r", encoding="utf-8") as df:
+                    docker_content = df.read()
+        
+        if not found_files:
+            raise HTTPException(400, "Nessun file di dipendenze rilevato.")
             
-            if not found_files:
-                raise HTTPException(400, "Nessun file di dipendenze rilevato.")
-                
-            with open(os.path.join(STORAGE_DIR, "discovered_files.json"), "w") as f:
-                json.dump(found_files, f)
-            
-            result = get_docker_analysis(docker_content, tmp_clone) if docker_content else {"steps": [], "images": [], "diffs": [], "artifacts": [], "yara": [], "removed_components": []}
+        with open(os.path.join(STORAGE_DIR, "discovered_files.json"), "w") as f:
+            json.dump(found_files, f)
+        
+        result = get_docker_analysis(docker_content, tmp_clone) if docker_content else {"steps": [], "images": [], "diffs": [], "artifacts": [], "yara": [], "removed_components": []}
 
-            images = result["images"]
+        images = result["images"]
+        removed_path = os.path.join(STORAGE_DIR, "removed_components.json")
 
-            removed_path = os.path.join(STORAGE_DIR, "removed_components.json")
+        with open(removed_path, "w") as f:
+            json.dump(result["removed_components"], f)
 
-            with open(removed_path, "w") as f:
-                json.dump(result["removed_components"], f)
-                
-            return {
-                "status": "success", 
-                "files": found_files, 
-                "steps": result["steps"],
-                "images": images,
-                "diffs": result["diffs"],
-                "artifacts": result.get("artifacts", []),
-                "yara": result.get("yara", [])
-            }
-            
-        finally:
-            shutil.rmtree(tmp_clone, onerror=remove_readonly, ignore_errors=True)
-                
-    # Se l'azione è "upload", salviamo tutti i file manuali caricati (requirements, poetry, docker) per l'analisi comparativa
-    if action == "upload":
-        if not requirements_file and not poetry_file and not docker_file:
-            raise HTTPException(400, "Carica almeno un file JSON.")
-
-        if requirements_file:
-            with open(os.path.join(STORAGE_DIR, "trivy_requirements.json"), "wb") as f:
-                f.write(await requirements_file.read())
-
-        if poetry_file:
-            with open(os.path.join(STORAGE_DIR, "trivy_poetry.json"), "wb") as f:
-                f.write(await poetry_file.read())
-
-        if docker_file: 
-            with open(os.path.join(STORAGE_DIR, "docker_sbom.json"), "wb") as f:
-                f.write(await docker_file.read())
-
-        return {"status": "success", "message": "File manuali salvati sul server."}
-
-    # Se l'azione è "generate", salviamo solo il file Docker (se presente) e prepariamo il server per la pipeline remota
-    elif action == "generate":
-        if docker_file:
-            with open(os.path.join(STORAGE_DIR, "docker_sbom.json"), "wb") as f:
-                f.write(await docker_file.read())
-        return {"status": "success", "message": "Pronto per l'attivazione della pipeline di generazione remota."}
-
+        return {
+            "status": "success", 
+            "files": found_files, 
+            "steps": result["steps"],
+            "images": images,
+            "diffs": result["diffs"],
+            "artifacts": result.get("artifacts", []),
+            "yara": result.get("yara", [])
+        }
+        
+    finally:
+        shutil.rmtree(tmp_clone, onerror=remove_readonly, ignore_errors=True)
 # ============================================================
 # Recupero dei file scoperti durante la fase di discovery per visualizzazione nel frontend
 # ============================================================

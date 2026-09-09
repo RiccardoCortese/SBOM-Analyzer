@@ -61,12 +61,9 @@ def render_config_target(backend_url: str):
         st.session_state.docker_analyzed = False
 
         data_payload = {
-            "action": "generate", 
-            "mode": "docker",
-            "dockerfile_path": dockerfile_path,
-            "manual_format": st.session_state.saved_format,
             "repo_url": repo_url,
-            "branch": branch
+            "branch": branch,
+            "dockerfile_path": dockerfile_path,
         }
         
         files_payload = {}
