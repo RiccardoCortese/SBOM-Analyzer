@@ -80,76 +80,63 @@ def get_package_name_from_purl(purl):
 
 def resolve_pypi_package(name, version):
 
-    with tempfile.TemporaryDirectory() as temp_dir:
+    command = [
+        "docker",
+        "run",
+        "--rm",
+        "python:3.12-slim",
+        "sh",
+        "-c",
+        (
+            "python -m pip install "
+            f"{name}=={version} "
+            "--dry-run "
+            "--ignore-installed "
+            "--report /tmp/pip_report.json "
+            "&& cat /tmp/pip_report.json"
+        )
+    ]
 
-        report_path = os.path.join(temp_dir, "pip_report.json")
+    try:
 
-        command = [
-            "docker",
-            "run",
-            "--rm",
-            "-v",
-            f"{temp_dir}:/simulation",
-            "python:3.12-slim",
-            "python",
-            "-m",
-            "pip",
-            "install",
-            f"{name}=={version}",
-            "--dry-run",
-            "--ignore-installed",
-            "--report",
-            "/simulation/pip_report.json"
-        ]
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=300
+        )
 
-        try:
+    except subprocess.TimeoutExpired:
 
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=300
-            )
+        return {
+            "success": False,
+            "error": "Timeout durante la risoluzione delle dipendenze Python."
+        }
 
-        except subprocess.TimeoutExpired:
+    except Exception as e:
 
-            return {
-                "success": False,
-                "error": "Timeout durante la risoluzione delle dipendenze Python."
-            }
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
-        except Exception as e:
+    if result.returncode != 0:
 
-            return {
-                "success": False,
-                "error": str(e)
-            }
+        return {
+            "success": False,
+            "error": result.stderr
+        }
 
-        if result.returncode != 0:
+    try:
 
-            return {
-                "success": False,
-                "error": result.stderr
-            }
+        report = json.loads(result.stdout)
 
-        if not os.path.exists(report_path):
+    except Exception as e:
 
-            return {
-                "success": False,
-                "error": "pip non ha prodotto il report."
-            }
-
-        try:
-
-            with open(report_path, "r", encoding="utf-8") as f:
-                report = json.load(f)
-
-        except Exception as e:
-
-            return {
-                "success": False,
-                "error": f"Errore lettura report pip: {e}"
-            }
+        return {
+            "success": False,
+            "error": f"Errore lettura report pip: {e}"
+        }
 
     packages = {}
 
@@ -179,86 +166,77 @@ def resolve_pypi_package(name, version):
 
 def resolve_npm_package(name, version):
 
-    with tempfile.TemporaryDirectory() as temp_dir:
+    package_data = {
+        "name": "dependency-simulation",
+        "version": "1.0.0",
+        "private": True,
+        "dependencies": {
+            name: version
+        }
+    }
 
-        package_json = os.path.join(temp_dir, "package.json")
-        package_lock = os.path.join(temp_dir, "package-lock.json")
+    package_json = json.dumps(package_data)
 
-        package_data = {
-            "name": "dependency-simulation",
-            "version": "1.0.0",
-            "private": True,
-            "dependencies": {
-                name: version
-            }
+    command = [
+        "docker",
+        "run",
+        "--rm",
+        "-i",
+        "node:22-slim",
+        "sh",
+        "-c",
+        (
+            "mkdir -p /tmp/simulation && "
+            "cat > /tmp/simulation/package.json && "
+            "npm install "
+            "--package-lock-only "
+            "--ignore-scripts "
+            "--prefix /tmp/simulation "
+            "&& cat /tmp/simulation/package-lock.json"
+        )
+    ]
+
+    try:
+
+        result = subprocess.run(
+            command,
+            input=package_json,
+            capture_output=True,
+            text=True,
+            timeout=300
+        )
+
+    except subprocess.TimeoutExpired:
+
+        return {
+            "success": False,
+            "error": "Timeout durante la risoluzione npm."
         }
 
-        try:
+    except Exception as e:
 
-            with open(package_json, "w", encoding="utf-8") as f:
-                json.dump(package_data, f, indent=2)
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
-            command = [
-                "docker",
-                "run",
-                "--rm",
-                "-v",
-                f"{temp_dir}:/simulation",
-                "node:22-slim",
-                "npm",
-                "install",
-                "--package-lock-only",
-                "--ignore-scripts",
-                "--prefix",
-                "/simulation"
-            ]
+    if result.returncode != 0:
 
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=300
-            )
+        return {
+            "success": False,
+            "error": result.stderr
+        }
 
-        except subprocess.TimeoutExpired:
+    try:
 
-            return {
-                "success": False,
-                "error": "Timeout durante la risoluzione npm."
-            }
+        lock = json.loads(result.stdout)
 
-        except Exception as e:
+    except Exception as e:
 
-            return {
-                "success": False,
-                "error": str(e)
-            }
-
-        if result.returncode != 0:
-
-            return {
-                "success": False,
-                "error": result.stderr
-            }
-
-        if not os.path.exists(package_lock):
-
-            return {
-                "success": False,
-                "error": "npm non ha prodotto package-lock.json."
-            }
-
-        try:
-
-            with open(package_lock, "r", encoding="utf-8") as f:
-                lock = json.load(f)
-
-        except Exception as e:
-
-            return {
-                "success": False,
-                "error": f"Errore lettura package-lock: {e}"
-            }
+        return {
+            "success": False,
+            "error": f"Errore lettura package-lock: {e}"
+        }
 
     packages = {}
 
@@ -278,33 +256,23 @@ def resolve_npm_package(name, version):
         "success": True,
         "packages": packages
     }
+    
 # ============================================================
 # MAVEN
 # ============================================================
 
 def resolve_maven_package(name, version):
 
-    with tempfile.TemporaryDirectory() as temp_dir:
+    if ":" not in name:
 
-        pom_path = os.path.join(temp_dir, "pom.xml")
+        return {
+            "success": False,
+            "error": f"Nome Maven non valido: {name}"
+        }
 
-        # ----------------------------------------------------
-        # PURL Maven:
-        #
-        # pkg:maven/junit/junit@4.13.1
-        #
-        # name = junit:junit
-        # ----------------------------------------------------
+    group_id, artifact_id = name.split(":", 1)
 
-        if ":" not in name:
-            return {
-                "success": False,
-                "error": f"Nome Maven non valido: {name}"
-            }
-
-        group_id, artifact_id = name.split(":", 1)
-
-        pom = f"""<?xml version="1.0" encoding="UTF-8"?>
+    pom = f"""<?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
@@ -329,65 +297,62 @@ def resolve_maven_package(name, version):
 </project>
 """
 
-        try:
-            with open(pom_path, "w", encoding="utf-8") as f:
-                f.write(pom)
+    command = [
+        "docker",
+        "run",
+        "--rm",
+        "-i",
+        "maven:3.9-eclipse-temurin-17",
+        "sh",
+        "-c",
+        (
+            "cat > /tmp/pom.xml && "
+            "mvn "
+            "-f /tmp/pom.xml "
+            "dependency:tree "
+            "-DoutputType=text "
+            "-Dverbose=false "
+            "-Dscope=runtime"
+        )
+    ]
 
-            command = [
-                "docker",
-                "run",
-                "--rm",
-                "-v",
-                f"{temp_dir}:/simulation",
-                "maven:3.9-eclipse-temurin-17",
-                "mvn",
-                "-f",
-                "/simulation/pom.xml",
-                "dependency:tree",
-                "-DoutputType=text",
-                "-Dverbose=false",
-                "-Dscope=runtime"
-            ]
+    try:
 
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=300
-            )
+        result = subprocess.run(
+            command,
+            input=pom,
+            capture_output=True,
+            text=True,
+            timeout=300
+        )
 
-        except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired:
 
-            return {
-                "success": False,
-                "error": "Timeout durante la risoluzione Maven."
-            }
+        return {
+            "success": False,
+            "error": "Timeout durante la risoluzione Maven."
+        }
 
-        except Exception as e:
+    except Exception as e:
 
-            return {
-                "success": False,
-                "error": str(e)
-            }
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
     if result.returncode != 0:
 
         return {
             "success": False,
             "error": (
-                "Maven non è riuscito a risolvere "
+                f"Maven non è riuscito a risolvere "
                 f"{name}={version}: "
                 f"{result.stderr}"
             )
         }
 
-    # ========================================================
-    # PARSING ALBERO MAVEN
-    # ========================================================
-
     packages = {}
 
-    # Il pacchetto che stiamo simulando deve esserci SEMPRE
     packages[name.lower()] = {
         "name": name,
         "version": version
@@ -400,14 +365,8 @@ def resolve_maven_package(name, version):
         if not line:
             continue
 
-        # Rimuove [INFO]
         if line.startswith("[INFO]"):
-
             line = line[len("[INFO]"):].strip()
-
-        # ----------------------------------------------------
-        # Ignora intestazioni Maven
-        # ----------------------------------------------------
 
         if line.startswith("simulation:dependency-simulation:"):
             continue
@@ -427,31 +386,15 @@ def resolve_maven_package(name, version):
         if line.startswith("Downloading from"):
             continue
 
-        # ----------------------------------------------------
-        # Manteniamo solamente le righe dell'albero
-        #
-        # +- junit:junit:jar:4.13.1:compile
-        # \- org.hamcrest:hamcrest-core:jar:1.3:compile
-        # ----------------------------------------------------
-
-        if not (line.startswith("+-") or line.startswith("\\-")):
+        if not (
+            line.startswith("+-")
+            or line.startswith("\\-")
+        ):
             continue
 
         dependency = line[2:].strip()
 
         parts = dependency.split(":")
-
-        # Maven:
-        #
-        # groupId
-        # artifactId
-        # type
-        # version
-        # scope
-        #
-        # Esempio:
-        #
-        # junit:junit:jar:4.13.1:compile
 
         if len(parts) < 4:
             continue
@@ -471,7 +414,6 @@ def resolve_maven_package(name, version):
 
         package_name = f"{group_id}:{artifact_id}"
 
-        # Evita di inserire il progetto Maven
         if package_name == "simulation:dependency-simulation":
             continue
 
@@ -479,10 +421,6 @@ def resolve_maven_package(name, version):
             "name": package_name,
             "version": package_version
         }
-
-    # ========================================================
-    # VALIDAZIONE
-    # ========================================================
 
     if name.lower() not in packages:
 
@@ -494,16 +432,26 @@ def resolve_maven_package(name, version):
             )
         }
 
-    print(f"[DEBUG MAVEN] {name}={version} risolte {len(packages)} dipendenze:", flush=True)
+    print(
+        f"[DEBUG MAVEN] "
+        f"{name}={version} "
+        f"risolte {len(packages)} dipendenze:",
+        flush=True
+    )
 
     for package_name, package_data in sorted(packages.items()):
 
-        print(f"{package_data['name']} -> {package_data['version']}", flush=True)
+        print(
+            f"{package_data['name']} -> "
+            f"{package_data['version']}",
+            flush=True
+        )
 
     return {
         "success": True,
         "packages": packages
     }
+
 # ============================================================
 # DISTRIBUZIONE DEB
 # ============================================================

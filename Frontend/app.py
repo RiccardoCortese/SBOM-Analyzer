@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 
 from components.configuration_target import render_config_target
@@ -17,7 +18,7 @@ from components.scan_vulnerability import render_scan_vulnerability
 st.set_page_config(page_title="SBOM Analyzer", layout="wide")
 st.title("SBOM Analyzer")
 
-BACKEND_URL = "http://127.0.0.1:8000"
+BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
 
 # ============================================================
 # STATE MANAGEMENT (Streamlit session_state)

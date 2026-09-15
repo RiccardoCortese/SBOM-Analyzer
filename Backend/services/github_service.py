@@ -93,6 +93,15 @@ def wait_and_download_artifacts(run_id: int, dest_dir: str):
 
     artifacts = res_art.json().get("artifacts", [])
     
+    print("[BACKEND] Artifact trovati su GitHub:", flush=True)
+
+    for artifact in artifacts:
+        print(
+            f"  - {artifact['name']} (id={artifact['id']})",
+            flush=True
+        )
+    
+    '''   
     # Rilevamento flessibile per supportare sia l'artifact statico singolo sia quelli multipli della matrice
     target_artifact = next((a for a in artifacts if "sbom" in a["name"].lower() or "results" in a["name"].lower() or "trivy" in a["name"].lower()), None)
     
@@ -134,4 +143,119 @@ def wait_and_download_artifacts(run_id: int, dest_dir: str):
     if os.path.exists(zip_path):
         os.remove(zip_path)
         
+    return True
+    '''
+    target_artifacts = [
+        a for a in artifacts
+        if "sbom" in a["name"].lower()
+        or "results" in a["name"].lower()
+        or "trivy" in a["name"].lower()
+    ]
+
+    if not target_artifacts:
+        return False
+
+    print(f"[BACKEND] Trovati {len(target_artifacts)} artifact SBOM.", flush=True)
+
+    manifests_dir = os.path.join(dest_dir, "manifests")
+    deps_dir = os.path.join(dest_dir, "dependencies")
+
+    os.makedirs(manifests_dir, exist_ok=True)
+    os.makedirs(deps_dir, exist_ok=True)
+
+    for artifact in target_artifacts:
+
+        print(
+            f"[BACKEND] Scarico artifact: {artifact['name']} "
+            f"(id={artifact['id']})",
+            flush=True
+        )
+
+        download_url = artifact["archive_download_url"]
+
+        res_dl = requests.get(
+            download_url,
+            headers=headers,
+            stream=True
+        )
+
+        if res_dl.status_code != 200:
+            print(
+                f"[BACKEND] Errore download {artifact['name']}: "
+                f"HTTP {res_dl.status_code}",
+                flush=True
+            )
+            continue
+
+        zip_path = os.path.join(
+            dest_dir,
+            f"artifact_{artifact['id']}.zip"
+        )
+
+        with open(zip_path, "wb") as f:
+            shutil.copyfileobj(res_dl.raw, f)
+
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
+
+            for file_name in zip_ref.namelist():
+
+                if not file_name.endswith(".json"):
+                    continue
+
+                # Prendiamo solo il nome del file, senza eventuali cartelle
+                base_name = os.path.basename(file_name)
+
+                if not base_name:
+                    continue
+
+                # Estraiamo temporaneamente nella root
+                extracted_path = zip_ref.extract(
+                    file_name,
+                    dest_dir
+                )
+
+                extracted_path = os.path.abspath(extracted_path)
+
+                if base_name in [
+                    "trivy_poetry.json",
+                    "trivy_requirements.json",
+                    "trivy_uv.json"
+                ]:
+                    destination_dir = manifests_dir
+                elif base_name not in [
+                    "docker_sbom.json",
+                    "cyclonedx-license-SBOM.json",
+                    "cyclonedx-vuln-SBOM.json"
+                ]:
+                    destination_dir = deps_dir
+                else:
+                    continue
+
+                destination = os.path.join(
+                    destination_dir,
+                    base_name
+                )
+
+                # Se esiste già un file con lo stesso nome,
+                # lo rendiamo univoco usando l'ID dell'artifact.
+                if os.path.exists(destination):
+                    name, ext = os.path.splitext(base_name)
+
+                    destination = os.path.join(
+                        destination_dir,
+                        f"{name}_{artifact['id']}{ext}"
+                    )
+
+                shutil.move(
+                    extracted_path,
+                    destination
+                )
+
+                print(
+                    f"[BACKEND] SBOM salvato: {destination}",
+                    flush=True
+                )
+
+        os.remove(zip_path)
+
     return True

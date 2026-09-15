@@ -61,7 +61,7 @@ async def upload_sbom(
             
         found_files = []
         # Questi sono i pattern di file "standard" che consideriamo validi per l'analisi delle dipendenze 
-        valid_patterns = ["requirements.txt", "pyproject.toml", "setup.py", "*.lock"]
+        valid_patterns = ["requirements.txt", "pyproject.toml", "setup.py", "*.lock", "pyproject.toml", "dependencies.json"]
         
         for root, _, files in os.walk(tmp_clone):
             for f in files:
