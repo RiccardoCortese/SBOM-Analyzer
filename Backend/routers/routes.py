@@ -20,7 +20,8 @@ from services.component_search import search_component, build_component_graph
 from utils.tools import get_trivy_path
 from routers.cve_routes import router as cve_router
 from routers.cve_routes import get_nvd_cves_batch
-
+from services.provenance_service import (find_dependency_chain, load_docker_step_sboms, find_component_origins, load_manifest_components)
+from services.source_dependencies import (analyze_source_components)
 router = APIRouter()
 
 router.include_router(cve_router)
@@ -355,6 +356,70 @@ def merge_artifacts():
         content = json.load(f) 
     
     return {"status": "success", "data": content, "merged_file": final_sbom}
+
+
+# ============================================================
+# SCANSIONE DEI COMPONENTI PER DEFINIRE LA PROVENIENZA E LA STORIA DELLE DIPENDENZE 
+# ============================================================
+
+@router.get("/component-provenance-dockerfile")
+def component_provenance():
+
+    step_sboms = load_docker_step_sboms(STORAGE_DIR)
+
+    docker_origins = find_component_origins(step_sboms)
+
+    manifest_components, dependency_map = load_manifest_components(STORAGE_DIR)
+
+    for purl, component in docker_origins.items():
+
+        chain = find_dependency_chain(
+            purl,
+            dependency_map
+        )
+
+        component["dependency_chain"] = chain or []
+
+        if chain and len(chain) >= 2:
+
+            parent_purl = chain[-2]
+
+            parent_component = (
+                manifest_components.get(parent_purl)
+            )
+
+            if parent_component:
+                component["derived_from"] = parent_component.get(
+                    "name",
+                    parent_purl
+                )
+            else:
+                component["derived_from"] = parent_purl
+
+        else:
+            component["derived_from"] = None
+
+    return {
+        "status": "success",
+        "manifest_components": manifest_components,
+        "docker_components": docker_origins
+    }
+
+# ============================================================
+# ANALISI DELLA PROVENIENZA DEI COMPONENTI TROVATI NEI FILE DI DIPENDENZE (requirements.txt, pyproject.toml, ecc.)
+# ============================================================    
+    
+@router.get("/source-component-analysis")
+def source_component_analysis():
+
+    result = analyze_source_components(STORAGE_DIR)
+    
+    #print(f"Source component analysis: {result}", flush=True)
+
+    if result.get("status") == "error":
+        return result
+
+    return result
 
 # ============================================================
 # SCAN VULNERABILITIES SULLO SBOM UNIFICATO DOPO IL MERGE (tramite Trivy)
