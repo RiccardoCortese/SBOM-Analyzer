@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import requests
 import pandas as pd
@@ -21,7 +22,7 @@ from components.component_provenance import render_component_provenance
 st.set_page_config(page_title="SBOM Analyzer", layout="wide")
 st.title("SBOM Analyzer")
 
-BACKEND_URL = "http://127.0.0.1:9000"
+BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:9000")
 
 # ============================================================
 # STATE MANAGEMENT (Streamlit session_state)

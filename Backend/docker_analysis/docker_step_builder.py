@@ -86,10 +86,14 @@ class DockerStepBuilder:
 
         try:
 
+            env = os.environ.copy()
+            env["DOCKER_BUILDKIT"] = "1"
+
             result = subprocess.run(
                 command,
                 capture_output=True,
-                text=True
+                text=True,
+                env=env
             )
 
             print("===== DOCKER STDOUT =====")

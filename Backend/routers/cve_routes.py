@@ -708,6 +708,8 @@ def simulate_update_endpoint(name: str, purl: str, current_version: str, target_
         sbom_file=sbom
     )
 
+    print(f"[DEBUG SIMULATE RESULT] {result}", flush=True)
+    
     if not result.get("success"):
 
         raise HTTPException(

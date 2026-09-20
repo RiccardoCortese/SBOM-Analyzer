@@ -1,0 +1,27 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        docker.io \
+        docker-cli \
+        git \
+        libicu-dev \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /root/.docker/cli-plugins \
+    && curl -SL https://github.com/docker/buildx/releases/download/v0.29.1/buildx-v0.29.1.linux-amd64 \
+       -o /root/.docker/cli-plugins/docker-buildx \
+    && chmod +x /root/.docker/cli-plugins/docker-buildx
+
+COPY Backend/requirements.txt .
+
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY Backend/ .
+
+EXPOSE 8000
+
+CMD ["python", "-u", "server.py"]
