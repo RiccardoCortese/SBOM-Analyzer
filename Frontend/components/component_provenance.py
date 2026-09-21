@@ -50,20 +50,12 @@ def render_component_provenance(backend_url: str):
     # COMPONENTI INTRODOTTI DAL DOCKERFILE
     # ============================================================
 
-    if st.button(
-        "Ricerca componenti introdotti da Dockerfile che non sono presenti nei manifest",
-        use_container_width=True
-    ):
+    if st.button("Ricerca componenti introdotti da Dockerfile che non sono presenti nei manifest", use_container_width=True):
         try:
-            res = requests.get(
-                f"{backend_url}/component-provenance-dockerfile"
-            )
+            res = requests.get(f"{backend_url}/component-provenance-dockerfile")
 
             if res.status_code != 200:
-                st.error(
-                    f"Errore durante l'analisi della provenienza: "
-                    f"{res.status_code}"
-                )
+                st.error(f"Errore durante l'analisi della provenienza: {res.status_code}")
                 return
 
             data = res.json()
@@ -165,10 +157,7 @@ def render_component_provenance(backend_url: str):
     # COMPONENTI NON PRESENTI NEI MANIFEST
     # ============================================================
 
-    if st.button(
-        "Analizza i componenti non presenti nei manifest",
-        use_container_width=True
-    ):
+    if st.button("Analizza i componenti non presenti nei manifest", use_container_width=True):
         try:
             res = requests.get(
                 f"{backend_url}/source-component-analysis"

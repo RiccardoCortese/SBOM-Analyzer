@@ -429,10 +429,7 @@ def source_component_analysis():
 def scan_merged_sbom():
 
     # SBOM generato dal merge precedente
-    final_sbom = os.path.join(
-        STORAGE_DIR,
-        "final_merged_sbom.json"
-    )
+    final_sbom = os.path.join(STORAGE_DIR, "final_merged_sbom.json")
 
     if not os.path.exists(final_sbom):
 
@@ -454,10 +451,7 @@ def scan_merged_sbom():
 
 
     # output report vulnerabilità
-    vulnerability_report = os.path.join(
-        STORAGE_DIR,
-        "trivy_vulnerabilities.json"
-    )
+    vulnerability_report = os.path.join(STORAGE_DIR, "trivy_vulnerabilities.json")
 
     command = [
         trivy_exe,
@@ -496,13 +490,36 @@ def scan_merged_sbom():
 
 
     # carica risultato
-    with open(
-        vulnerability_report,
-        "r",
-        encoding="utf-8"
-    ) as f:
+    with open(vulnerability_report, "r", encoding="utf-8") as f:
 
         report = json.load(f)
+        
+    # ==========================================================
+    # CLASSIFICAZIONE DIPENDENZE
+    # ==========================================================
+
+    analysis = analyze_source_components(STORAGE_DIR)
+
+    dependency_classification = {}
+
+    if analysis.get("status") == "success":
+
+        # Componenti dichiarati nei file sorgente
+        for component in analysis.get("declared", []):
+
+            purl = component.get("purl")
+
+            if purl:
+                dependency_classification[purl] = "direct"
+
+        # Componenti non dichiarati
+        for component in analysis.get("not_declared", []):
+
+            purl = component.get("purl")
+            classification = component.get("classification")
+
+            if purl:
+                dependency_classification[purl] = classification
 
 
     # ==========================================================
@@ -601,6 +618,14 @@ def scan_merged_sbom():
                     cve_id,
                     vuln.get("Severity", "UNKNOWN")
                 )
+            
+            # ------------------------------------------------------
+            # TIPO DI DIPENDENZA
+            # ------------------------------------------------------
+
+            purl = vuln.get("PkgIdentifier",{}).get("PURL", "")
+
+            vuln["DependencyType"] = dependency_classification.get(purl, "unknown")
 
 
     return {
