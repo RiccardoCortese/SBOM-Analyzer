@@ -504,6 +504,34 @@ def scan_merged_sbom():
 
         report = json.load(f)
 
+        
+    # ==========================================================
+    # CLASSIFICAZIONE DIPENDENZE
+    # ==========================================================
+
+    analysis = analyze_source_components(STORAGE_DIR)
+
+    dependency_classification = {}
+
+    if analysis.get("status") == "success":
+
+        # Componenti dichiarati nei file sorgente
+        for component in analysis.get("declared", []):
+
+            purl = component.get("purl")
+
+            if purl:
+                dependency_classification[purl] = "direct"
+
+        # Componenti non dichiarati
+        for component in analysis.get("not_declared", []):
+
+            purl = component.get("purl")
+            classification = component.get("classification")
+
+            if purl:
+                dependency_classification[purl] = classification
+
 
     # ==========================================================
     # RECUPERO SEVERITY NVD IN BATCH
@@ -601,6 +629,15 @@ def scan_merged_sbom():
                     cve_id,
                     vuln.get("Severity", "UNKNOWN")
                 )
+
+            
+            # ------------------------------------------------------
+            # TIPO DI DIPENDENZA
+            # ------------------------------------------------------
+
+            purl = vuln.get("PkgIdentifier",{}).get("PURL", "")
+
+            vuln["DependencyType"] = dependency_classification.get(purl, "unknown")
 
 
     return {
