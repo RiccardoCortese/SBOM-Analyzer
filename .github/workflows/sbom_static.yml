@@ -11,7 +11,7 @@ on:
         required: false
         default: 'main'
       format:
-        description: 'Format (requirements, poetry, uv, entrambi)'
+        description: 'Format (requirements, poetry, uv, maven, gradle, entrambi)'
         required: false
         default: 'entrambi'
   repository_dispatch:
@@ -127,6 +127,55 @@ jobs:
         else
           echo "Nessun file di lock (uv.lock/poetry.lock) trovato."
         fi
+
+    # ============================================================
+    # ESECUZIONE MAVEN
+    # ============================================================
+    - name: Process Maven SBOMs
+      if: ${{ env.FORMAT_TYPE == 'maven' || env.FORMAT_TYPE == 'entrambi' }}
+      run: |
+        mkdir -p ${{ env.OUTPUT_DIR }}
+
+        POM_PATH=$(find "$(pwd)/repo_esterna" -name "pom.xml" | head -n 1)
+
+        if [ -n "$POM_PATH" ]; then
+          echo "pom.xml trovato: $POM_PATH"
+
+          DIR_PATH=$(dirname "$POM_PATH")
+
+          trivy fs \
+            --format cyclonedx \
+            --output ${{ env.OUTPUT_DIR }}/trivy_maven.json \
+            "$DIR_PATH"
+
+        else
+          echo "Skipping Maven: pom.xml non trovato."
+        fi
+
+    # ============================================================
+    # ESECUZIONE GRADLE
+    # ============================================================
+    - name: Process Gradle SBOMs
+      if: ${{ env.FORMAT_TYPE == 'gradle' || env.FORMAT_TYPE == 'entrambi' }}
+      run: |
+        mkdir -p ${{ env.OUTPUT_DIR }}
+
+        GRADLE_PATH=$(find "$(pwd)/repo_esterna" \( -name "build.gradle" -o -name "build.gradle.kts" \) | head -n 1)
+
+        if [ -n "$GRADLE_PATH" ]; then
+          echo "File Gradle trovato: $GRADLE_PATH"
+
+          DIR_PATH=$(dirname "$GRADLE_PATH")
+
+          trivy fs \
+            --format cyclonedx \
+            --output ${{ env.OUTPUT_DIR }}/trivy_gradle.json \
+            "$DIR_PATH"
+
+        else
+          echo "Skipping Gradle: build.gradle/build.gradle.kts non trovato."
+        fi
+
     # ============================================================
     # CARICAMENTO RISULTATI COMPLETI
     # ============================================================
