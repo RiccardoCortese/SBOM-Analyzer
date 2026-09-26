@@ -14,6 +14,7 @@ from components.graph_visualization import render_graph_section
 from components.search_component import render_search_component
 from components.scan_vulnerability import render_scan_vulnerability
 from components.component_provenance import render_component_provenance
+from components.component_not_declared_vuln import render_component_not_declared_vuln
 # ============================================================
 # CONFIGURAZIONE APP STREAMLIT
 # ============================================================
@@ -51,7 +52,6 @@ if "docker_analyzed" not in st.session_state:
 if "docker_results" not in st.session_state:
     st.session_state.docker_results = {"graphs": {}, "hierarchy_with_weights": {}}
 
-
             
 # ============================================================
 # RENDER DEI COMPONENTI DELLA DASHBOARD
@@ -80,6 +80,9 @@ render_component_provenance(BACKEND_URL)
 
 # Sezione Vulnerability Scan 
 render_scan_vulnerability(BACKEND_URL)
+
+# Sezione Componenti non dichiarati con vulnerabilità
+render_component_not_declared_vuln(BACKEND_URL)
 
 # Sezione Ricerca Componenti specifici e Visualizzazione Grafi
 render_search_component(BACKEND_URL)

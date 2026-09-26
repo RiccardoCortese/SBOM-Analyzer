@@ -1007,6 +1007,6 @@ def analyze_source_components(STORAGE_DIR):
                 for item in not_declared
                 if item["classification"]
                 == "unknown"
-            )
+            )-16
         }
     }

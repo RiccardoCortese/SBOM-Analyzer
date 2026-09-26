@@ -43,7 +43,12 @@ def style_classification(value):
 
 
 def render_component_provenance(backend_url: str):
-
+    
+    if "dockerfile_analysis" not in st.session_state:
+        st.session_state.dockerfile_analysis = None
+    if "source_component_analysis" not in st.session_state:
+        st.session_state.source_component_analysis = None
+        
     st.subheader("Provenienza dei componenti")
 
     # ============================================================
@@ -65,93 +70,88 @@ def render_component_provenance(backend_url: str):
                     "Analisi della provenienza non riuscita."
                 )
                 return
-
-            manifest_components = data.get(
-                "manifest_components",
-                {}
-            )
-
-            docker_components = data.get(
-                "docker_components",
-                {}
-            )
-
-            st.write(
-                f"Componenti da sbom manifest: "
-                f"{len(manifest_components)}"
-            )
-
-            st.write(
-                f"Componenti introdotti dagli sbom step Docker: "
-                f"{len(docker_components)}"
-            )
-
-            if docker_components:
-
-                st.markdown(
-                    "### Componenti introdotti durante la build"
-                )
-
-                st.info(
-                    "Questi componenti sono stati introdotti durante "
-                    "gli step del Dockerfile e non sono presenti nei "
-                    "manifest del progetto."
-                )
-
-                rows = []
-
-                for purl, component in docker_components.items():
-
-                    dependency_chain = component.get(
-                        "dependency_chain",
-                        []
-                    )
-
-                    rows.append({
-                        "Componente": component.get(
-                            "name",
-                            "unknown"
-                        ),
-                        "Versione": component.get(
-                            "version",
-                            "unknown"
-                        ),
-                        "Deriva da": component.get(
-                            "derived_from",
-                            "-"
-                        ),
-                        "Catena dipendenze": (
-                            " → ".join(dependency_chain)
-                            if dependency_chain
-                            else "-"
-                        ),
-                        "Step Docker": component.get(
-                            "origin_step",
-                            "-"
-                        ),
-                        "File SBOM": component.get(
-                            "origin_file",
-                            "-"
-                        ),
-                        "PURL": purl
-                    })
-
-                st.dataframe(
-                    rows,
-                    use_container_width=True,
-                    hide_index=True
-                )
-
             else:
-                st.info(
-                    "Non sono stati trovati componenti introdotti "
-                    "durante gli step Docker."
+                st.session_state.dockerfile_analysis = data
+        except requests.RequestException as e:
+            st.error(f"Errore di connessione al backend: {e}")
+            
+        
+    data = st.session_state.dockerfile_analysis
+    
+    if data is not None:
+        manifest_components = data.get(
+            "manifest_components",
+            {}
+        )
+
+        docker_components = data.get(
+            "docker_components",
+            {}
+        )
+
+        if docker_components:
+
+            st.markdown(
+                "### Componenti introdotti durante la build"
+            )
+
+            st.info(
+                "Questi componenti sono stati introdotti durante "
+                "gli step del Dockerfile e non sono presenti nei "
+                "manifest del progetto."
+            )
+
+            rows = []
+
+            for purl, component in docker_components.items():
+
+                dependency_chain = component.get(
+                    "dependency_chain",
+                    []
                 )
 
-        except requests.RequestException as e:
-            st.error(
-                f"Errore di connessione al backend: {e}"
+                rows.append({
+                    "Componente": component.get(
+                        "name",
+                        "unknown"
+                    ),
+                    "Versione": component.get(
+                        "version",
+                        "unknown"
+                    ),
+                    "Deriva da": component.get(
+                        "derived_from",
+                        "-"
+                    ),
+                    "Catena dipendenze": (
+                        " → ".join(dependency_chain)
+                        if dependency_chain
+                        else "-"
+                    ),
+                    "Step Docker": component.get(
+                        "origin_step",
+                        "-"
+                    ),
+                    "File SBOM": component.get(
+                        "origin_file",
+                        "-"
+                    ),
+                    "PURL": purl
+                })
+
+            st.dataframe(
+                rows,
+                use_container_width=True,
+                hide_index=True
             )
+
+        else:
+            st.info(
+                "Non sono stati trovati componenti introdotti "
+                "durante gli step Docker."
+            )
+
+        
 
     # ============================================================
     # COMPONENTI NON PRESENTI NEI MANIFEST
@@ -159,9 +159,7 @@ def render_component_provenance(backend_url: str):
 
     if st.button("Analizza i componenti non presenti nei manifest", use_container_width=True):
         try:
-            res = requests.get(
-                f"{backend_url}/source-component-analysis"
-            )
+            res = requests.get(f"{backend_url}/source-component-analysis")
 
             if res.status_code != 200:
                 st.error(
@@ -177,168 +175,142 @@ def render_component_provenance(backend_url: str):
                     "Analisi dei componenti dai manifest non riuscita."
                 )
                 return
+            else:
+                st.session_state.source_component_analysis = data
+        except requests.RequestException as e:
+            st.error(f"Errore di connessione al backend: {e}")
+            
+    data = st.session_state.source_component_analysis 
+    
+    if data is not None:
+        not_declared = data.get(
+            "not_declared",
+            []
+        )
 
-            not_declared = data.get(
-                "not_declared",
-                []
+        stats = data.get(
+            "stats",
+            {}
+        )
+
+        
+
+        # ----------------------------------------------------
+        # LEGENDA
+        # ----------------------------------------------------
+
+        st.markdown("#### Classificazione")
+
+        legend = pd.DataFrame({
+            "Categoria": [
+                "Dichiarata",
+                "Transitiva",
+                "Indiretta",
+                "Sconosciuta"
+            ],
+            "Significato": [
+                "Dipendenza dichiarata direttamente nei manifest",
+                "Dipendenza derivata da una componente dichiarata",
+                "Dipendenza derivata da una componente non dichiarata",
+                "Componente senza una relazione di dipendenza identificabile"
+            ]
+        })
+
+        st.dataframe(
+            legend,
+            use_container_width=True,
+            hide_index=True
+        )
+
+        # ----------------------------------------------------
+        # STATISTICHE
+        # ----------------------------------------------------
+
+        
+
+        # ----------------------------------------------------
+        # TABELLA
+        # ----------------------------------------------------
+
+        if not_declared:
+
+            st.markdown(
+                "### Componenti non presenti nei manifest"
             )
 
-            stats = data.get(
-                "stats",
-                {}
+            st.info(
+                "I colori nella colonna Classificazione indicano "
+                "la provenienza della componente."
             )
 
-            st.write(
-                f"Componenti non presenti nei manifest: "
-                f"{len(not_declared)}"
+            rows = []
+
+            for component in not_declared:
+
+                dependency_chain = component.get(
+                    "dependency_chain",
+                    []
+                )
+
+                classification = component.get(
+                    "classification",
+                    "unknown"
+                )
+
+                rows.append({
+                    "Componente": component.get(
+                        "name",
+                        "unknown"
+                    ),
+                    "Versione": component.get(
+                        "version",
+                        "unknown"
+                    ),
+                    "Classificazione": get_classification_label(
+                        classification
+                    ),
+                    "Deriva da": component.get(
+                        "derived_from",
+                        "-"
+                    ),
+                    "Catena dipendenze": (
+                        " → ".join(dependency_chain)
+                        if dependency_chain
+                        else "-"
+                    ),
+                    "PURL": component.get(
+                        "purl",
+                        "-"
+                    )
+                })
+
+            df = pd.DataFrame(rows)
+
+            styled_df = df.style.map(
+                lambda value: style_classification(
+                    {
+                        "Dichiarata": "declared",
+                        "Transitiva": "transitive",
+                        "Indiretta": "indirect",
+                        "Sconosciuta": "unknown"
+                    }.get(
+                        value,
+                        "unknown"
+                    )
+                ),
+                subset=["Classificazione"]
             )
-
-            # ----------------------------------------------------
-            # LEGENDA
-            # ----------------------------------------------------
-
-            st.markdown("#### Classificazione")
-
-            legend = pd.DataFrame({
-                "Categoria": [
-                    "Dichiarata",
-                    "Transitiva",
-                    "Indiretta",
-                    "Sconosciuta"
-                ],
-                "Significato": [
-                    "Dipendenza dichiarata direttamente nei manifest",
-                    "Dipendenza derivata da una componente dichiarata",
-                    "Dipendenza derivata da una componente non dichiarata",
-                    "Componente senza una relazione di dipendenza identificabile"
-                ]
-            })
 
             st.dataframe(
-                legend,
+                styled_df,
                 use_container_width=True,
                 hide_index=True
             )
 
-            # ----------------------------------------------------
-            # STATISTICHE
-            # ----------------------------------------------------
-
-            col1, col2, col3 = st.columns(3)
-
-            with col1:
-                st.metric(
-                    "Transitive",
-                    stats.get(
-                        "transitive",
-                        0
-                    )
-                )
-
-            with col2:
-                st.metric(
-                    "Indirette",
-                    stats.get(
-                        "indirect",
-                        0
-                    )
-                )
-
-            with col3:
-                st.metric(
-                    "Sconosciute",
-                    stats.get(
-                        "unknown",
-                        0
-                    )
-                )
-
-            # ----------------------------------------------------
-            # TABELLA
-            # ----------------------------------------------------
-
-            if not_declared:
-
-                st.markdown(
-                    "### Componenti non presenti nei manifest"
-                )
-
-                st.info(
-                    "I colori nella colonna Classificazione indicano "
-                    "la provenienza della componente."
-                )
-
-                rows = []
-
-                for component in not_declared:
-
-                    dependency_chain = component.get(
-                        "dependency_chain",
-                        []
-                    )
-
-                    classification = component.get(
-                        "classification",
-                        "unknown"
-                    )
-
-                    rows.append({
-                        "Componente": component.get(
-                            "name",
-                            "unknown"
-                        ),
-                        "Versione": component.get(
-                            "version",
-                            "unknown"
-                        ),
-                        "Classificazione": get_classification_label(
-                            classification
-                        ),
-                        "Deriva da": component.get(
-                            "derived_from",
-                            "-"
-                        ),
-                        "Catena dipendenze": (
-                            " → ".join(dependency_chain)
-                            if dependency_chain
-                            else "-"
-                        ),
-                        "PURL": component.get(
-                            "purl",
-                            "-"
-                        )
-                    })
-
-                df = pd.DataFrame(rows)
-
-                styled_df = df.style.map(
-                    lambda value: style_classification(
-                        {
-                            "Dichiarata": "declared",
-                            "Transitiva": "transitive",
-                            "Indiretta": "indirect",
-                            "Sconosciuta": "unknown"
-                        }.get(
-                            value,
-                            "unknown"
-                        )
-                    ),
-                    subset=["Classificazione"]
-                )
-
-                st.dataframe(
-                    styled_df,
-                    use_container_width=True,
-                    hide_index=True
-                )
-
-            else:
-                st.info(
-                    "Non sono stati trovati componenti non presenti "
-                    "nei manifest del progetto."
-                )
-
-        except requests.RequestException as e:
-            st.error(
-                f"Errore di connessione al backend: {e}"
+        else:
+            st.info(
+                "Non sono stati trovati componenti non presenti "
+                "nei manifest del progetto."
             )
+
+

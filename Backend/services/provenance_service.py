@@ -278,3 +278,287 @@ def load_manifest_components(STORAGE_DIR):
             dependency_map.update(sbom_dependencies)
 
     return manifest_components, dependency_map
+
+# Salva i componenti non dichiarati in un file JSON.
+def save_not_declared_components(STORAGE_DIR, not_declared_components):
+
+    output = {
+        "components": not_declared_components,
+        "count": len(not_declared_components)
+    }
+
+    output_file = os.path.join(
+        STORAGE_DIR,
+        "not_declared_components.json"
+    )
+
+    try:
+        with open(
+            output_file,
+            "w",
+            encoding="utf-8"
+        ) as f:
+            json.dump(
+                output,
+                f,
+                indent=4,
+                ensure_ascii=False
+            )
+
+        print(
+            f"[PROVENANCE] Componenti non dichiarati: "
+            f"{len(not_declared_components)}",
+            flush=True
+        )
+
+        print(
+            f"[PROVENANCE] File salvato: {output_file}",
+            flush=True
+        )
+
+        return output
+
+    except Exception as e:
+
+        print(
+            f"[PROVENANCE] Errore salvataggio "
+            f"not_declared_components.json: {e}",
+            flush=True
+        )
+
+        return None
+
+# Salva i componenti non dichiarati che presentano almeno una vulnerabilità in un file JSON.
+def save_non_declared_vulnerable_components(STORAGE_DIR):
+
+    not_declared_file = os.path.join(
+        STORAGE_DIR,
+        "not_declared_components.json"
+    )
+
+    trivy_file = os.path.join(
+        STORAGE_DIR,
+        "trivy_vulnerabilities.json"
+    )
+
+    # ============================================================
+    # CARICA COMPONENTI NON DICHIARATI
+    # ============================================================
+
+    if not os.path.exists(not_declared_file):
+        print(
+            f"[PROVENANCE] File non trovato: "
+            f"{not_declared_file}",
+            flush=True
+        )
+        return None
+
+    with open(
+        not_declared_file,
+        "r",
+        encoding="utf-8"
+    ) as f:
+
+        not_declared_data = json.load(f)
+
+    not_declared_components = (
+        not_declared_data.get("components", [])
+    )
+
+    not_declared_purls = {
+        component.get("purl")
+        for component in not_declared_components
+        if component.get("purl")
+    }
+
+    # Per recuperare i dati completi del componente
+    not_declared_by_purl = {
+        component.get("purl"): component
+        for component in not_declared_components
+        if component.get("purl")
+    }
+
+    # ============================================================
+    # CARICA TRIVY
+    # ============================================================
+
+    if not os.path.exists(trivy_file):
+        print(
+            f"[PROVENANCE] File Trivy non trovato: "
+            f"{trivy_file}",
+            flush=True
+        )
+        return None
+
+    with open(
+        trivy_file,
+        "r",
+        encoding="utf-8"
+    ) as f:
+
+        trivy_data = json.load(f)
+
+    # ============================================================
+    # COMPONENTI VULNERABILI TOTALI
+    # ============================================================
+
+    vulnerable_purls = set()
+
+    # PURL -> lista CVE
+    vulnerable_components = {}
+
+    for result in trivy_data.get("Results", []):
+
+        vulnerabilities = (
+            result.get("Vulnerabilities", [])
+            or []
+        )
+
+        for vulnerability in vulnerabilities:
+
+            purl = (
+                vulnerability
+                .get("PkgIdentifier", {})
+                .get("PURL")
+            )
+
+            if not purl:
+                continue
+
+            # Ogni PURL viene contato una sola volta
+            vulnerable_purls.add(purl)
+
+            # ====================================================
+            # SOLO COMPONENTI NON DICHIARATI
+            # ====================================================
+
+            if purl not in not_declared_purls:
+                continue
+
+            component = not_declared_by_purl[purl]
+
+            if purl not in vulnerable_components:
+
+                vulnerable_components[purl] = {
+                    "name": component.get(
+                        "name",
+                        "unknown"
+                    ),
+                    "version": component.get(
+                        "version",
+                        "unknown"
+                    ),
+                    "purl": purl,
+                    "classification": component.get(
+                        "classification",
+                        "unknown"
+                    ),
+                    "derived_from": component.get(
+                        "derived_from"
+                    ),
+                    "dependency_chain": component.get(
+                        "dependency_chain",
+                        []
+                    ),
+                    "cves": []
+                }
+
+            cve_id = vulnerability.get(
+                "VulnerabilityID"
+            )
+
+            if cve_id:
+                vulnerable_components[purl]["cves"].append(
+                    cve_id
+                )
+
+    # ============================================================
+    # RIMUOVE CVE DUPLICATE
+    # ============================================================
+
+    for component in vulnerable_components.values():
+
+        component["cves"] = list(
+            dict.fromkeys(
+                component["cves"]
+            )
+        )
+
+    # ============================================================
+    # CALCOLA METRICHE
+    # ============================================================
+
+    total_vulnerable_components = len(
+        vulnerable_purls
+    )
+
+    total_non_declared_vulnerable = len(
+        vulnerable_components
+    )
+
+    percentage = 0
+
+    if total_vulnerable_components > 0:
+
+        percentage = (
+            total_non_declared_vulnerable
+            / total_vulnerable_components
+        ) * 100
+
+    # ============================================================
+    # OUTPUT
+    # ============================================================
+
+    output = {
+        "components": list(
+            vulnerable_components.values()
+        ),
+        "count": total_non_declared_vulnerable
+    }
+
+    output_file = os.path.join(
+        STORAGE_DIR,
+        "non_declared_vulnerable_components.json"
+    )
+
+    with open(
+        output_file,
+        "w",
+        encoding="utf-8"
+    ) as f:
+
+        json.dump(
+            output,
+            f,
+            indent=4,
+            ensure_ascii=False
+        )
+
+    print(
+        f"[PROVENANCE] Componenti vulnerabili totali: "
+        f"{total_vulnerable_components}",
+        flush=True
+    )
+
+    print(
+        f"[PROVENANCE] Componenti non dichiarati vulnerabili: "
+        f"{total_non_declared_vulnerable}",
+        flush=True
+    )
+
+    print(
+        f"[PROVENANCE] Percentuale: "
+        f"{percentage:.2f}%",
+        flush=True
+    )
+
+    return {
+        "components": list(
+            vulnerable_components.values()
+        ),
+        "count": total_non_declared_vulnerable,
+        "total_vulnerable_components": (
+            total_vulnerable_components
+        ),
+        "percentage": percentage
+    }

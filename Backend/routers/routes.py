@@ -20,7 +20,7 @@ from services.component_search import search_component, build_component_graph
 from utils.tools import get_trivy_path
 from routers.cve_routes import router as cve_router
 from routers.cve_routes import get_nvd_cves_batch
-from services.provenance_service import (find_dependency_chain, load_docker_step_sboms, find_component_origins, load_manifest_components)
+from services.provenance_service import (find_dependency_chain, load_docker_step_sboms, find_component_origins, load_manifest_components, save_non_declared_vulnerable_components, save_not_declared_components)
 from services.source_dependencies import (analyze_source_components)
 router = APIRouter()
 
@@ -419,7 +419,46 @@ def source_component_analysis():
     if result.get("status") == "error":
         return result
 
+    # Salva i componenti non dichiarati
+    save_not_declared_components(STORAGE_DIR, result.get("not_declared", []))
+
+
     return result
+
+# ============================================================
+# ANALISI DEI COMPONENTI NON DICHIARATI CON VULNERABILITÀ
+# ============================================================
+
+@router.get("/non-declared-vulnerable-components")
+def non_declared_vulnerable_components():
+
+    result = save_non_declared_vulnerable_components(STORAGE_DIR)
+
+    if result is None:
+        return {
+            "status": "error",
+            "message": "Impossibile calcolare i componenti vulnerabili."
+        }
+
+    return {
+        "status": "success",
+        "total_vulnerable_components": result.get(
+            "total_vulnerable_components",
+            0
+        ),
+        "non_declared_vulnerable_components": result.get(
+            "count",
+            0
+        ),
+        "percentage": result.get(
+            "percentage",
+            0
+        ),
+        "components": result.get(
+            "components",
+            []
+        )
+    }
 
 # ============================================================
 # SCAN VULNERABILITIES SULLO SBOM UNIFICATO DOPO IL MERGE (tramite Trivy)

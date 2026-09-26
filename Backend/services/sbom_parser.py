@@ -339,7 +339,7 @@ def get_docker_analysis(dockerfile_content, build_context):
         sbom_paths = []
         previous_filesystem = None
         filesystem_path = None
-        #steps = steps[:4]
+        steps = steps[:4]
         for step in steps:
 
             # Costruzione immagine dello step
