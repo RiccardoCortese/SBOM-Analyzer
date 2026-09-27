@@ -1,3 +1,4 @@
+
 name: Automated Multi-Tool SBOM Analysis
 
 on:
@@ -39,14 +40,7 @@ jobs:
         ref: ${{ env.SRC_BRANCH }}
         path: repo_esterna
     
-    # CACHE MAVEN
-    - name: Cache Maven dependencies
-      uses: actions/cache@v4
-      with:
-        path: ~/.m2/repository
-        key: ${{ runner.os }}-maven-${{ hashFiles('repo_esterna/**/pom.xml') }}
-        restore-keys: |
-          ${{ runner.os }}-maven-
+
         
     - name: Detect Required Python Version
       id: detect-python
@@ -140,6 +134,132 @@ jobs:
     # ============================================================
     # ESECUZIONE MAVEN
     # ============================================================
+
+    # RILEVAMENTO VERSIONE JAVA DAL POM.XML
+    - name: Detect Java Version
+      id: detect-java
+      if: ${{ env.FORMAT_TYPE == 'maven' || env.FORMAT_TYPE == 'entrambi' }}
+      run: |
+        POM_PATH="repo_esterna/pom.xml"
+
+        if [ ! -f "$POM_PATH" ]; then
+          POM_PATH=$(find "$(pwd)/repo_esterna" -name "pom.xml" -not -path "*/target/*" | head -n 1)
+        fi
+
+        VERSION="17"
+
+        if [ -n "$POM_PATH" ] && [ -f "$POM_PATH" ]; then
+          echo "Rilevamento versione Java da: $POM_PATH"
+
+          DETECTED_VERSION=$(python - "$POM_PATH" <<'PY'
+        import sys
+        import re
+        import xml.etree.ElementTree as ET
+
+        pom_path = sys.argv[1]
+
+        try:
+            root = ET.parse(pom_path).getroot()
+        except (ET.ParseError, OSError) as exc:
+            print(f"Errore nella lettura del pom.xml: {exc}", file=sys.stderr)
+            sys.exit(0)
+
+        def local_name(tag):
+            return tag.split("}")[-1]
+
+        def find_child(element, name):
+            if element is None:
+                return None
+            for child in element:
+                if local_name(child.tag) == name:
+                    return child
+            return None
+
+        def child_text(element, name):
+            child = find_child(element, name)
+            return child.text.strip() if child is not None and child.text else None
+
+        properties = find_child(root, "properties")
+        property_values = {}
+
+        if properties is not None:
+            for child in properties:
+                property_values[local_name(child.tag)] = (
+                    child.text.strip() if child.text else ""
+                )
+
+        def resolve(value, depth=0):
+            if not value or depth > 10:
+                return value
+            pattern = re.compile(r"\$\{([^}]+)\}")
+            return pattern.sub(
+                lambda match: resolve(
+                    property_values.get(match.group(1), match.group(0)),
+                    depth + 1
+                ),
+                value
+            )
+
+        candidates = []
+
+        build = find_child(root, "build")
+        plugins = find_child(build, "plugins")
+
+        if plugins is not None:
+            for plugin in plugins:
+                if child_text(plugin, "artifactId") != "maven-compiler-plugin":
+                    continue
+
+                configuration = find_child(plugin, "configuration")
+                if configuration is not None:
+                    for field in ("release", "target", "source"):
+                        value = child_text(configuration, field)
+                        if value:
+                            candidates.append((field, resolve(value)))
+
+        for field in ("maven.compiler.release",
+                      "maven.compiler.target",
+                      "maven.compiler.source",
+                      "java.version",
+                      "jdk.version"):
+            value = property_values.get(field)
+            if value:
+                candidates.append((field, resolve(value)))
+
+        for field, value in candidates:
+            value = value.strip()
+            match = re.search(r"(?:1\.)?(\d+)", value)
+            if not match:
+                continue
+
+            version = match.group(1)
+            if version.isdigit() and int(version) >= 5:
+                print(version)
+                sys.exit(0)
+
+        print("")
+        PY
+        )
+
+          if [ -n "$DETECTED_VERSION" ]; then
+            VERSION="$DETECTED_VERSION"
+            echo "Versione Java rilevata: $VERSION"
+          else
+            echo "Versione Java non rilevata, uso fallback: $VERSION"
+          fi
+        else
+          echo "Nessun pom.xml trovato, uso fallback Java $VERSION"
+        fi
+
+        echo "java_version=$VERSION" >> "$GITHUB_OUTPUT"
+
+    - name: Setup Java
+      if: ${{ env.FORMAT_TYPE == 'maven' || env.FORMAT_TYPE == 'entrambi' }}
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: ${{ steps.detect-java.outputs.java_version }}
+        cache: maven
 
     - name: Resolve Maven dependencies
       if: ${{ env.FORMAT_TYPE == 'maven' || env.FORMAT_TYPE == 'entrambi' }}
