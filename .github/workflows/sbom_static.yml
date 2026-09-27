@@ -140,23 +140,45 @@ jobs:
     # ============================================================
     # ESECUZIONE MAVEN
     # ============================================================
+
+    - name: Resolve Maven dependencies
+      if: ${{ env.FORMAT_TYPE == 'maven' || env.FORMAT_TYPE == 'entrambi' }}
+      run: |
+        POM_PATH="repo_esterna/pom.xml"
+
+        if [ -f "$POM_PATH" ]; then
+          echo "Risoluzione dipendenze: $POM_PATH"
+          mvn -B -f "$POM_PATH" dependency:resolve
+        else
+          echo "POM principale non trovato, cerco un pom.xml..."
+          POM_PATH=$(find "$(pwd)/repo_esterna" -name "pom.xml" -not -path "*/target/*" | head -n 1)
+
+          if [ -n "$POM_PATH" ]; then
+            mvn -B -f "$POM_PATH" dependency:resolve
+          else
+            echo "Nessun pom.xml trovato"
+          fi
+        fi
+
     - name: Process Maven SBOMs
       if: ${{ env.FORMAT_TYPE == 'maven' || env.FORMAT_TYPE == 'entrambi' }}
       run: |
-        mkdir -p ${{ env.OUTPUT_DIR }}
+        mkdir -p "${{ env.OUTPUT_DIR }}"
 
-        POM_PATH=$(find "$(pwd)/repo_esterna" -name "pom.xml" | head -n 1)
+        POM_PATH="repo_esterna/pom.xml"
 
-        if [ -n "$POM_PATH" ]; then
+        if [ ! -f "$POM_PATH" ]; then
+          POM_PATH=$(find "$(pwd)/repo_esterna" -name "pom.xml" -not -path "*/target/*" | head -n 1)
+        fi
+
+        if [ -n "$POM_PATH" ] && [ -f "$POM_PATH" ]; then
           echo "pom.xml trovato: $POM_PATH"
-
           DIR_PATH=$(dirname "$POM_PATH")
 
           trivy fs \
             --format cyclonedx \
-            --output ${{ env.OUTPUT_DIR }}/trivy_maven.json \
+            --output "${{ env.OUTPUT_DIR }}/trivy_maven.json" \
             "$DIR_PATH"
-
         else
           echo "Skipping Maven: pom.xml non trovato."
         fi
