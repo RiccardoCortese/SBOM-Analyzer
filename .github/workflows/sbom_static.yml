@@ -38,6 +38,15 @@ jobs:
         repository: ${{ env.SRC_REPO }}
         ref: ${{ env.SRC_BRANCH }}
         path: repo_esterna
+    
+    # CACHE MAVEN
+    - name: Cache Maven dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.m2/repository
+        key: ${{ runner.os }}-maven-${{ hashFiles('repo_esterna/**/pom.xml') }}
+        restore-keys: |
+          ${{ runner.os }}-maven-
         
     - name: Detect Required Python Version
       id: detect-python
