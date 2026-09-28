@@ -135,7 +135,10 @@ jobs:
     # ESECUZIONE MAVEN
     # ============================================================
 
+    
+    # ============================================================
     # RILEVAMENTO VERSIONE JAVA DAL POM.XML
+    # ============================================================
     - name: Detect Java Version
       id: detect-java
       if: ${{ env.FORMAT_TYPE == 'maven' || env.FORMAT_TYPE == 'entrambi' }}
@@ -146,12 +149,14 @@ jobs:
           POM_PATH=$(find "$(pwd)/repo_esterna" -name "pom.xml" -not -path "*/target/*" | head -n 1)
         fi
 
-        VERSION="17"
+        # Versione predefinita per eseguire Maven
+        FALLBACK_VERSION="17"
+        PROJECT_VERSION=""
 
         if [ -n "$POM_PATH" ] && [ -f "$POM_PATH" ]; then
           echo "Rilevamento versione Java da: $POM_PATH"
 
-          DETECTED_VERSION=$(python - "$POM_PATH" <<'PY'
+          PROJECT_VERSION=$(python - "$POM_PATH" <<'PY'
         import sys
         import re
         import xml.etree.ElementTree as ET
@@ -191,6 +196,7 @@ jobs:
         def resolve(value, depth=0):
             if not value or depth > 10:
                 return value
+
             pattern = re.compile(r"\$\{([^}]+)\}")
             return pattern.sub(
                 lambda match: resolve(
@@ -217,45 +223,62 @@ jobs:
                         if value:
                             candidates.append((field, resolve(value)))
 
-        for field in ("maven.compiler.release",
-                      "maven.compiler.target",
-                      "maven.compiler.source",
-                      "java.version",
-                      "jdk.version"):
+        for field in (
+            "maven.compiler.release",
+            "maven.compiler.target",
+            "maven.compiler.source",
+            "java.version",
+            "jdk.version"
+        ):
             value = property_values.get(field)
             if value:
                 candidates.append((field, resolve(value)))
 
         for field, value in candidates:
-            value = value.strip()
-            match = re.search(r"(?:1\.)?(\d+)", value)
-            if not match:
+            if not value:
                 continue
 
-            version = match.group(1)
-            if version.isdigit() and int(version) >= 5:
-                print(version)
-                sys.exit(0)
+            value = value.strip()
+
+            # Supporta sia 1.6 che 8, 11, 17, ecc.
+            match = re.fullmatch(r"(?:1\.)?(\d+)(?:\.0)?", value)
+            if match:
+                version = int(match.group(1))
+                if version >= 5:
+                    print(version)
+                    sys.exit(0)
 
         print("")
         PY
         )
 
-          if [ -n "$DETECTED_VERSION" ]; then
-            VERSION="$DETECTED_VERSION"
-            echo "Versione Java rilevata: $VERSION"
-          else
-            echo "Versione Java non rilevata, uso fallback: $VERSION"
-          fi
         else
-          echo "Nessun pom.xml trovato, uso fallback Java $VERSION"
+          echo "Nessun pom.xml trovato."
         fi
 
-        echo "java_version=$VERSION" >> "$GITHUB_OUTPUT"
+        # Se la versione rilevata è utilizzabile, la usa per Maven.
+        # Le versioni Java precedenti alla 8 non sono disponibili
+        # nel normale setup Temurin di GitHub Actions.
+        if [[ "$PROJECT_VERSION" =~ ^[0-9]+$ ]] && [ "$PROJECT_VERSION" -ge 8 ]; then
+          JAVA_VERSION="$PROJECT_VERSION"
+          echo "Versione Java del progetto: $PROJECT_VERSION"
+          echo "Uso Java $JAVA_VERSION per Maven."
+        else
+          JAVA_VERSION="$FALLBACK_VERSION"
+          if [ -n "$PROJECT_VERSION" ]; then
+            echo "Java $PROJECT_VERSION dichiarata dal progetto, non utilizzabile nel setup standard."
+          else
+            echo "Versione Java non rilevata."
+          fi
+          echo "Uso Java $JAVA_VERSION come fallback per Maven."
+        fi
+
+        echo "project_java_version=$PROJECT_VERSION" >> "$GITHUB_OUTPUT"
+        echo "java_version=$JAVA_VERSION" >> "$GITHUB_OUTPUT"
 
     - name: Setup Java
       if: ${{ env.FORMAT_TYPE == 'maven' || env.FORMAT_TYPE == 'entrambi' }}
-      uses: actions/setup-java@v4
+      uses: actions/setup-java@v5
       with:
         distribution: temurin
         java-version: ${{ steps.detect-java.outputs.java_version }}
