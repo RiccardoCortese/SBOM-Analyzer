@@ -1,4 +1,3 @@
-
 name: Automated Multi-Tool SBOM Analysis
 
 on:
@@ -132,11 +131,6 @@ jobs:
         fi
 
     # ============================================================
-    # ESECUZIONE MAVEN
-    # ============================================================
-
-    
-    # ============================================================
     # RILEVAMENTO VERSIONE JAVA DAL POM.XML
     # ============================================================
     - name: Detect Java Version
@@ -249,16 +243,14 @@ jobs:
                     sys.exit(0)
 
         print("")
-        PY
-        )
+        print("Nessuna versione Java compatibile trovata.")
+        sys.exit(1)
 
         else
           echo "Nessun pom.xml trovato."
         fi
 
         # Se la versione rilevata è utilizzabile, la usa per Maven.
-        # Le versioni Java precedenti alla 8 non sono disponibili
-        # nel normale setup Temurin di GitHub Actions.
         if [[ "$PROJECT_VERSION" =~ ^[0-9]+$ ]] && [ "$PROJECT_VERSION" -ge 8 ]; then
           JAVA_VERSION="$PROJECT_VERSION"
           echo "Versione Java del progetto: $PROJECT_VERSION"
@@ -284,25 +276,6 @@ jobs:
         java-version: ${{ steps.detect-java.outputs.java_version }}
         cache: maven
 
-    - name: Resolve Maven dependencies
-      if: ${{ env.FORMAT_TYPE == 'maven' || env.FORMAT_TYPE == 'entrambi' }}
-      run: |
-        POM_PATH="repo_esterna/pom.xml"
-
-        if [ -f "$POM_PATH" ]; then
-          echo "Risoluzione dipendenze: $POM_PATH"
-          mvn -B -f "$POM_PATH" dependency:resolve
-        else
-          echo "POM principale non trovato, cerco un pom.xml..."
-          POM_PATH=$(find "$(pwd)/repo_esterna" -name "pom.xml" -not -path "*/target/*" | head -n 1)
-
-          if [ -n "$POM_PATH" ]; then
-            mvn -B -f "$POM_PATH" dependency:resolve
-          else
-            echo "Nessun pom.xml trovato"
-          fi
-        fi
-
     - name: Process Maven SBOMs
       if: ${{ env.FORMAT_TYPE == 'maven' || env.FORMAT_TYPE == 'entrambi' }}
       run: |
@@ -318,10 +291,20 @@ jobs:
           echo "pom.xml trovato: $POM_PATH"
           DIR_PATH=$(dirname "$POM_PATH")
 
-          trivy fs \
-            --format cyclonedx \
-            --output "${{ env.OUTPUT_DIR }}/trivy_maven.json" \
-            "$DIR_PATH"
+          cd "$DIR_PATH"
+          # Generazione nativa tramite il plugin CycloneDX Maven
+          mvn org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom -Dcyclonedx.skip=false
+
+          # Individua il file generato (di default target/bom.json o target/cyclonedx/bom.json)
+          if [ -f "target/bom.json" ]; then
+            cp target/bom.json "${{ github.workspace }}/${{ env.OUTPUT_DIR }}/trivy_maven.json"
+          elif [ -f "target/cyclonedx/bom.json" ]; then
+            cp target/cyclonedx/bom.json "${{ github.workspace }}/${{ env.OUTPUT_DIR }}/trivy_maven.json"
+          else
+            # Fallback generico se la struttura varia
+            find target -name "bom.json" -exec cp {} "${{ github.workspace }}/${{ env.OUTPUT_DIR }}/trivy_maven.json" \;
+          fi
+          cd -
         else
           echo "Skipping Maven: pom.xml non trovato."
         fi
@@ -338,13 +321,41 @@ jobs:
 
         if [ -n "$GRADLE_PATH" ]; then
           echo "File Gradle trovato: $GRADLE_PATH"
-
           DIR_PATH=$(dirname "$GRADLE_PATH")
 
-          trivy fs \
-            --format cyclonedx \
-            --output ${{ env.OUTPUT_DIR }}/trivy_gradle.json \
-            "$DIR_PATH"
+          # Crea uno script temporaneo Groovy per iniettare il plugin CycloneDX senza modificare il codice
+          cat << 'EOF' > /tmp/init-cyclonedx.gradle
+          initscript {
+              repositories {
+                  gradlePluginPortal()
+                  mavenCentral()
+              }
+              dependencies {
+                  classpath "org.cyclonedx.bom:org.cyclonedx.bom.gradle.plugin:1.10.0"
+              }
+          }
+          allprojects {
+              apply plugin: org.cyclonedx.gradle.CyclonedxPlugin
+          }
+          EOF
+
+          # Esegue Gradle applicando l'init-script e invocando il task del plugin
+          cd "$DIR_PATH"
+          chmod +x ./gradlew || true
+          
+          if [ -f "./gradlew" ]; then
+            ./gradlew cyclonedxBom --init-script /tmp/init-cyclonedx.gradle
+          else
+            gradle cyclonedxBom --init-script /tmp/init-cyclonedx.gradle
+          fi
+
+          # Copia l'SBOM generato nella cartella di output della action
+          if [ -f "build/reports/cyclonedx/bom.json" ]; then
+            cp build/reports/cyclonedx/bom.json "${{ github.workspace }}/${{ env.OUTPUT_DIR }}/trivy_gradle.json"
+          else
+            find build -name "bom.json" -exec cp {} "${{ github.workspace }}/${{ env.OUTPUT_DIR }}/trivy_gradle.json" \;
+          fi
+          cd -
 
         else
           echo "Skipping Gradle: build.gradle/build.gradle.kts non trovato."
