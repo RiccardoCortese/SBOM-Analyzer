@@ -150,7 +150,7 @@ jobs:
         if [ -n "$POM_PATH" ] && [ -f "$POM_PATH" ]; then
           echo "Rilevamento versione Java da: $POM_PATH"
 
-          PROJECT_VERSION=$(python - "$POM_PATH" <<'PY'
+          PROJECT_VERSION=$(python - "$POM_PATH" << 'EOF_PY'
         import sys
         import re
         import xml.etree.ElementTree as ET
@@ -234,7 +234,6 @@ jobs:
 
             value = value.strip()
 
-            # Supporta sia 1.6 che 8, 11, 17, ecc.
             match = re.fullmatch(r"(?:1\.)?(\d+)(?:\.0)?", value)
             if match:
                 version = int(match.group(1))
@@ -243,8 +242,8 @@ jobs:
                     sys.exit(0)
 
         print("")
-        print("Nessuna versione Java compatibile trovata.")
-        sys.exit(1)
+        EOF_PY
+        )
 
         else
           echo "Nessun pom.xml trovato."
@@ -267,7 +266,7 @@ jobs:
 
         echo "project_java_version=$PROJECT_VERSION" >> "$GITHUB_OUTPUT"
         echo "java_version=$JAVA_VERSION" >> "$GITHUB_OUTPUT"
-
+        
     - name: Setup Java
       if: ${{ env.FORMAT_TYPE == 'maven' || env.FORMAT_TYPE == 'entrambi' }}
       uses: actions/setup-java@v5
