@@ -311,6 +311,12 @@ jobs:
     # ============================================================
     # ESECUZIONE GRADLE - CYCLONEDX
     # ============================================================
+    - name: Setup Java for Gradle
+      if: ${{ env.FORMAT_TYPE == 'gradle' || env.FORMAT_TYPE == 'entrambi' }}
+      uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: '25'
     - name: Process Gradle SBOMs
       if: ${{ env.FORMAT_TYPE == 'gradle' || env.FORMAT_TYPE == 'entrambi' }}
       run: |
