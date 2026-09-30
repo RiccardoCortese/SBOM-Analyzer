@@ -334,11 +334,10 @@ jobs:
             '    }' \
             '}' \
             'allprojects {' \
-            '    apply plugin: org.cyclonedx.gradle.CyclonedxPlugin' \
+            '    apply plugin: "org.cyclonedx.bom"' \
             '}' \
             > /tmp/init-cyclonedx.gradle
 
-          # Esegue Gradle applicando l'init-script
           cd "$DIR_PATH"
           chmod +x ./gradlew || true
 
@@ -348,7 +347,6 @@ jobs:
             gradle cyclonedxBom --init-script /tmp/init-cyclonedx.gradle
           fi
 
-          # Copia l'SBOM generato nella cartella di output
           if [ -f "build/reports/cyclonedx/bom.json" ]; then
             cp build/reports/cyclonedx/bom.json "${{ github.workspace }}/${{ env.OUTPUT_DIR }}/trivy_gradle.json"
           else
