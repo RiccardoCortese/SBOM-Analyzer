@@ -314,7 +314,7 @@ jobs:
     - name: Process Gradle SBOMs
       if: ${{ env.FORMAT_TYPE == 'gradle' || env.FORMAT_TYPE == 'entrambi' }}
       run: |
-        mkdir -p ${{ env.OUTPUT_DIR }}
+        mkdir -p "${{ env.OUTPUT_DIR }}"
 
         GRADLE_PATH=$(find "$(pwd)/repo_esterna" \( -name "build.gradle" -o -name "build.gradle.kts" \) | head -n 1)
 
@@ -322,44 +322,43 @@ jobs:
           echo "File Gradle trovato: $GRADLE_PATH"
           DIR_PATH=$(dirname "$GRADLE_PATH")
 
-          # Crea uno script temporaneo Groovy per iniettare il plugin CycloneDX senza modificare il codice
-          cat << 'EOF' > /tmp/init-cyclonedx.gradle
-          initscript {
-              repositories {
-                  gradlePluginPortal()
-                  mavenCentral()
-              }
-              dependencies {
-                  classpath "org.cyclonedx.bom:org.cyclonedx.bom.gradle.plugin:1.10.0"
-              }
-          }
-          allprojects {
-              apply plugin: org.cyclonedx.gradle.CyclonedxPlugin
-          }
-          EOF
+          # Crea lo script temporaneo Groovy per iniettare il plugin CycloneDX
+          printf '%s\n' \
+            'initscript {' \
+            '    repositories {' \
+            '        gradlePluginPortal()' \
+            '        mavenCentral()' \
+            '    }' \
+            '    dependencies {' \
+            '        classpath "org.cyclonedx.bom:org.cyclonedx.bom.gradle.plugin:1.10.0"' \
+            '    }' \
+            '}' \
+            'allprojects {' \
+            '    apply plugin: org.cyclonedx.gradle.CyclonedxPlugin' \
+            '}' \
+            > /tmp/init-cyclonedx.gradle
 
-          # Esegue Gradle applicando l'init-script e invocando il task del plugin
+          # Esegue Gradle applicando l'init-script
           cd "$DIR_PATH"
           chmod +x ./gradlew || true
-          
+
           if [ -f "./gradlew" ]; then
             ./gradlew cyclonedxBom --init-script /tmp/init-cyclonedx.gradle
           else
             gradle cyclonedxBom --init-script /tmp/init-cyclonedx.gradle
           fi
 
-          # Copia l'SBOM generato nella cartella di output della action
+          # Copia l'SBOM generato nella cartella di output
           if [ -f "build/reports/cyclonedx/bom.json" ]; then
             cp build/reports/cyclonedx/bom.json "${{ github.workspace }}/${{ env.OUTPUT_DIR }}/trivy_gradle.json"
           else
             find build -name "bom.json" -exec cp {} "${{ github.workspace }}/${{ env.OUTPUT_DIR }}/trivy_gradle.json" \;
           fi
-          cd -
 
+          cd -
         else
           echo "Skipping Gradle: build.gradle/build.gradle.kts non trovato."
         fi
-
     # ============================================================
     # CARICAMENTO RISULTATI COMPLETI
     # ============================================================
