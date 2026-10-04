@@ -491,8 +491,6 @@ jobs:
           # ======================================================
 
           printf '%s\n' \
-            'import org.cyclonedx.gradle.CyclonedxPlugin' \
-            '' \
             'initscript {' \
             '    repositories {' \
             '        gradlePluginPortal()' \
@@ -503,7 +501,7 @@ jobs:
             '}' \
             '' \
             'rootProject {' \
-            '    apply plugin: CyclonedxPlugin' \
+            '    apply plugin: "org.cyclonedx.bom"' \
             '}' \
             > /tmp/init-cyclonedx.gradle
 
