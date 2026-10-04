@@ -490,22 +490,22 @@ jobs:
           # CycloneDX 3.x supporta Gradle 8.4+
           # ======================================================
 
-          printf '%s\n' \
-            'import org.cyclonedx.gradle.CyclonedxPlugin' \
-            '' \
-            'initscript {' \
-            '    repositories {' \
-            '        gradlePluginPortal()' \
-            '    }' \
-            '    dependencies {' \
-            '        classpath "org.cyclonedx.bom:org.cyclonedx.bom.gradle.plugin:${{ steps.detect-gradle-java.outputs.cyclonedx_version }}"' \
-            '    }' \
-            '}' \
-            '' \
-            'rootProject {' \
-            '    apply plugin: CyclonedxPlugin' \
-            '}' \
-            > /tmp/init-cyclonedx.gradle
+          cat > /tmp/init-cyclonedx.gradle <<'EOF'
+          initscript {
+              repositories {
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+
+              dependencies {
+                  classpath "org.cyclonedx:cyclonedx-gradle-plugin:${{ steps.detect-gradle-java.outputs.cyclonedx_version }}"
+              }
+          }
+
+          rootProject {
+              apply plugin: org.cyclonedx.gradle.CyclonedxPlugin
+          }
+          EOF
           echo "Initialization script CycloneDX:"
           cat /tmp/init-cyclonedx.gradle
 
