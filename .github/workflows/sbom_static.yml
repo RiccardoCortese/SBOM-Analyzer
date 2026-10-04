@@ -311,12 +311,62 @@ jobs:
     # ============================================================
     # ESECUZIONE GRADLE - CYCLONEDX
     # ============================================================
+    - name: Detect Gradle Java Version
+      id: detect-gradle-java
+      if: ${{ env.FORMAT_TYPE == 'gradle' || env.FORMAT_TYPE == 'entrambi' }}
+      run: |
+        GRADLE_PROPERTIES=$(find "$(pwd)/repo_esterna" \
+          -path "*/gradle/wrapper/gradle-wrapper.properties" \
+          -not -path "*/build/*" \
+          | head -n 1)
+
+        if [ -n "$GRADLE_PROPERTIES" ] && [ -f "$GRADLE_PROPERTIES" ]; then
+
+          echo "Gradle wrapper trovato: $GRADLE_PROPERTIES"
+
+          DISTRIBUTION_URL=$(grep '^distributionUrl=' "$GRADLE_PROPERTIES" | cut -d'=' -f2-)
+
+          GRADLE_VERSION=$(echo "$DISTRIBUTION_URL" \
+            | sed -E 's/.*gradle-([0-9]+\.[0-9]+(\.[0-9]+)?).*/\1/')
+
+          echo "Versione Gradle rilevata: $GRADLE_VERSION"
+
+          GRADLE_MAJOR=$(echo "$GRADLE_VERSION" | cut -d'.' -f1)
+          GRADLE_MINOR=$(echo "$GRADLE_VERSION" | cut -d'.' -f2)
+
+          # Determina la JVM minima compatibile con la versione di Gradle
+          if [ "$GRADLE_MAJOR" -le 6 ]; then
+            JAVA_VERSION="11"
+          elif [ "$GRADLE_MAJOR" -eq 7 ]; then
+            JAVA_VERSION="17"
+          elif [ "$GRADLE_MAJOR" -eq 8 ]; then
+            JAVA_VERSION="17"
+          else
+            JAVA_VERSION="21"
+          fi
+
+          echo "Java scelta per Gradle $GRADLE_VERSION: $JAVA_VERSION"
+
+        else
+
+          echo "Gradle wrapper non trovato."
+          echo "Uso Java 17 come fallback."
+
+          GRADLE_VERSION=""
+          JAVA_VERSION="17"
+
+        fi
+
+        echo "gradle_version=$GRADLE_VERSION" >> "$GITHUB_OUTPUT"
+        echo "java_version=$JAVA_VERSION" >> "$GITHUB_OUTPUT"
+
     - name: Setup Java for Gradle
       if: ${{ env.FORMAT_TYPE == 'gradle' || env.FORMAT_TYPE == 'entrambi' }}
       uses: actions/setup-java@v5
       with:
         distribution: temurin
-        java-version: '25'
+        java-version: ${{ steps.detect-gradle-java.outputs.java_version }}
+
     - name: Process Gradle SBOMs
       if: ${{ env.FORMAT_TYPE == 'gradle' || env.FORMAT_TYPE == 'entrambi' }}
       run: |
