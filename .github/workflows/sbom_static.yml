@@ -311,7 +311,7 @@ jobs:
     # ============================================================
     # ESECUZIONE GRADLE - CYCLONEDX
     # ============================================================
-    - name: Detect Gradle Java Version
+    - name: Detect Gradle and Java Version
       id: detect-gradle-java
       if: ${{ env.FORMAT_TYPE == 'gradle' || env.FORMAT_TYPE == 'entrambi' }}
       run: |
@@ -320,45 +320,69 @@ jobs:
           -not -path "*/build/*" \
           | head -n 1)
 
-        if [ -n "$GRADLE_PROPERTIES" ] && [ -f "$GRADLE_PROPERTIES" ]; then
+        if [ -z "$GRADLE_PROPERTIES" ]; then
+          echo "Gradle Wrapper non trovato."
+          echo "Uso fallback: Gradle 8.x / Java 17"
+          echo "gradle_version=unknown" >> "$GITHUB_OUTPUT"
+          echo "java_version=17" >> "$GITHUB_OUTPUT"
+          echo "cyclonedx_version=3.4.1" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
 
-          echo "Gradle wrapper trovato: $GRADLE_PROPERTIES"
+        echo "Gradle wrapper properties: $GRADLE_PROPERTIES"
 
-          DISTRIBUTION_URL=$(grep '^distributionUrl=' "$GRADLE_PROPERTIES" | cut -d'=' -f2-)
+        GRADLE_VERSION=$(grep '^distributionUrl=' "$GRADLE_PROPERTIES" \
+          | sed -E 's/.*gradle-([0-9]+\.[0-9]+(\.[0-9]+)?)-.*/\1/')
 
-          GRADLE_VERSION=$(echo "$DISTRIBUTION_URL" \
-            | sed -E 's/.*gradle-([0-9]+\.[0-9]+(\.[0-9]+)?).*/\1/')
+        if [ -z "$GRADLE_VERSION" ]; then
+          echo "Impossibile rilevare la versione Gradle."
+          echo "Uso fallback: Java 17 / CycloneDX 3.4.1"
+          echo "gradle_version=unknown" >> "$GITHUB_OUTPUT"
+          echo "java_version=17" >> "$GITHUB_OUTPUT"
+          echo "cyclonedx_version=3.4.1" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
 
-          echo "Versione Gradle rilevata: $GRADLE_VERSION"
+        echo "Versione Gradle rilevata: $GRADLE_VERSION"
 
-          GRADLE_MAJOR=$(echo "$GRADLE_VERSION" | cut -d'.' -f1)
-          GRADLE_MINOR=$(echo "$GRADLE_VERSION" | cut -d'.' -f2)
+        GRADLE_MAJOR=$(echo "$GRADLE_VERSION" | cut -d. -f1)
+        GRADLE_MINOR=$(echo "$GRADLE_VERSION" | cut -d. -f2)
 
-          # Determina la JVM minima compatibile con la versione di Gradle
-          if [ "$GRADLE_MAJOR" -le 6 ]; then
-            JAVA_VERSION="11"
-          elif [ "$GRADLE_MAJOR" -eq 7 ]; then
-            JAVA_VERSION="17"
-          elif [ "$GRADLE_MAJOR" -eq 8 ]; then
+        # ----------------------------------------
+        # Java necessario per ESEGUIRE Gradle
+        # ----------------------------------------
+        if [ "$GRADLE_MAJOR" -lt 7 ]; then
+          JAVA_VERSION="11"
+        elif [ "$GRADLE_MAJOR" -eq 7 ]; then
+          if [ "$GRADLE_MINOR" -ge 3 ]; then
             JAVA_VERSION="17"
           else
-            JAVA_VERSION="21"
+            JAVA_VERSION="11"
           fi
-
-          echo "Java scelta per Gradle $GRADLE_VERSION: $JAVA_VERSION"
-
-        else
-
-          echo "Gradle wrapper non trovato."
-          echo "Uso Java 17 come fallback."
-
-          GRADLE_VERSION=""
+        elif [ "$GRADLE_MAJOR" -eq 8 ]; then
           JAVA_VERSION="17"
-
+        else
+          JAVA_VERSION="21"
         fi
+
+        # ----------------------------------------
+        # Versione CycloneDX compatibile
+        # ----------------------------------------
+        if [ "$GRADLE_MAJOR" -lt 8 ]; then
+          CYCLONEDX_VERSION="1.10.0"
+        elif [ "$GRADLE_MAJOR" -eq 8 ] && [ "$GRADLE_MINOR" -lt 4 ]; then
+          CYCLONEDX_VERSION="2.2.0"
+        else
+          CYCLONEDX_VERSION="3.4.1"
+        fi
+
+        echo "Gradle: $GRADLE_VERSION"
+        echo "Java runtime: $JAVA_VERSION"
+        echo "CycloneDX: $CYCLONEDX_VERSION"
 
         echo "gradle_version=$GRADLE_VERSION" >> "$GITHUB_OUTPUT"
         echo "java_version=$JAVA_VERSION" >> "$GITHUB_OUTPUT"
+        echo "cyclonedx_version=$CYCLONEDX_VERSION" >> "$GITHUB_OUTPUT"
 
     - name: Setup Java for Gradle
       if: ${{ env.FORMAT_TYPE == 'gradle' || env.FORMAT_TYPE == 'entrambi' }}
@@ -434,7 +458,7 @@ jobs:
             '        gradlePluginPortal()' \
             '    }' \
             '    dependencies {' \
-            '        classpath "org.cyclonedx.bom:org.cyclonedx.bom.gradle.plugin:3.4.1"' \
+            '        classpath "org.cyclonedx.bom:org.cyclonedx.bom.gradle.plugin:${{ steps.detect-gradle-java.outputs.cyclonedx_version }}"' \
             '    }' \
             '}' \
             '' \
