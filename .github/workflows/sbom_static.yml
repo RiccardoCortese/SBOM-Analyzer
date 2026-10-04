@@ -465,6 +465,17 @@ jobs:
             'rootProject {' \
             '    apply plugin: CyclonedxPlugin' \
             '}' \
+            '' \
+            'allprojects {' \
+            '    configurations.configureEach {' \
+            '        attributes {' \
+            '            attribute(' \
+            '                org.gradle.api.attributes.Attribute.of("org.gradle.jvm.environment", String),' \
+            '                "standard-jvm"' \
+            '            )' \
+            '        }' \
+            '    }' \
+            '}' \
             > /tmp/init-cyclonedx.gradle
 
           echo "Initialization script CycloneDX:"
