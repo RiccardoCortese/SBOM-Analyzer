@@ -311,7 +311,7 @@ jobs:
     # ============================================================
     # ESECUZIONE GRADLE - CYCLONEDX
     # ============================================================
-    - name: Detect Gradle and Java Version
+    - name: Detect Gradle, Java and CycloneDX Version
       id: detect-gradle-java
       if: ${{ env.FORMAT_TYPE == 'gradle' || env.FORMAT_TYPE == 'entrambi' }}
       run: |
@@ -322,7 +322,8 @@ jobs:
 
         if [ -z "$GRADLE_PROPERTIES" ]; then
           echo "Gradle Wrapper non trovato."
-          echo "Uso fallback: Gradle 8.x / Java 17"
+          echo "Uso fallback: Java 17 / CycloneDX 3.4.1"
+
           echo "gradle_version=unknown" >> "$GITHUB_OUTPUT"
           echo "java_version=17" >> "$GITHUB_OUTPUT"
           echo "cyclonedx_version=3.4.1" >> "$GITHUB_OUTPUT"
@@ -336,11 +337,7 @@ jobs:
 
         if [ -z "$GRADLE_VERSION" ]; then
           echo "Impossibile rilevare la versione Gradle."
-          echo "Uso fallback: Java 17 / CycloneDX 3.4.1"
-          echo "gradle_version=unknown" >> "$GITHUB_OUTPUT"
-          echo "java_version=17" >> "$GITHUB_OUTPUT"
-          echo "cyclonedx_version=3.4.1" >> "$GITHUB_OUTPUT"
-          exit 0
+          exit 1
         fi
 
         echo "Versione Gradle rilevata: $GRADLE_VERSION"
@@ -348,42 +345,85 @@ jobs:
         GRADLE_MAJOR=$(echo "$GRADLE_VERSION" | cut -d. -f1)
         GRADLE_MINOR=$(echo "$GRADLE_VERSION" | cut -d. -f2)
 
-        # ----------------------------------------
-        # Java necessario per ESEGUIRE Gradle
-        # ----------------------------------------
-        if [ "$GRADLE_MAJOR" -lt 7 ]; then
+        JAVA_VERSION=""
+        CYCLONEDX_VERSION=""
+
+        # =====================================================
+        # Gradle < 7.3
+        # Java 11
+        # CycloneDX 1.6.1
+        # =====================================================
+        if [ "$GRADLE_MAJOR" -lt 7 ] || \
+           { [ "$GRADLE_MAJOR" -eq 7 ] && [ "$GRADLE_MINOR" -lt 3 ]; }; then
+
           JAVA_VERSION="11"
+          CYCLONEDX_VERSION="1.6.1"
+
+        # =====================================================
+        # Gradle 7.3 - 7.x
+        # Java 17
+        # CycloneDX 1.6.1
+        # =====================================================
         elif [ "$GRADLE_MAJOR" -eq 7 ]; then
-          if [ "$GRADLE_MINOR" -ge 3 ]; then
-            JAVA_VERSION="17"
-          else
-            JAVA_VERSION="11"
-          fi
-        elif [ "$GRADLE_MAJOR" -eq 8 ]; then
+
           JAVA_VERSION="17"
-        else
-          JAVA_VERSION="21"
-        fi
+          CYCLONEDX_VERSION="1.6.1"
 
-        # ----------------------------------------
-        # Versione CycloneDX compatibile
-        # ----------------------------------------
-        if [ "$GRADLE_MAJOR" -lt 8 ]; then
-          CYCLONEDX_VERSION="1.10.0"
+        # =====================================================
+        # Gradle 8.0 - 8.3
+        # Java 17
+        # CycloneDX 2.4.1
+        # =====================================================
         elif [ "$GRADLE_MAJOR" -eq 8 ] && [ "$GRADLE_MINOR" -lt 4 ]; then
-          CYCLONEDX_VERSION="2.2.0"
-        else
+
+          JAVA_VERSION="17"
+          CYCLONEDX_VERSION="2.4.1"
+
+        # =====================================================
+        # Gradle 8.4 - 8.x
+        # Java 17
+        # CycloneDX 3.4.1
+        # =====================================================
+        elif [ "$GRADLE_MAJOR" -eq 8 ]; then
+
+          JAVA_VERSION="17"
           CYCLONEDX_VERSION="3.4.1"
+
+        # =====================================================
+        # Gradle 9.0.x
+        # Java 21
+        # CycloneDX 3.4.1
+        # =====================================================
+        elif [ "$GRADLE_MAJOR" -eq 9 ] && [ "$GRADLE_MINOR" -lt 1 ]; then
+
+          JAVA_VERSION="21"
+          CYCLONEDX_VERSION="3.4.1"
+
+        # =====================================================
+        # Gradle 9.1+
+        # Java 25
+        # CycloneDX 3.4.1
+        # =====================================================
+        else
+
+          JAVA_VERSION="25"
+          CYCLONEDX_VERSION="3.4.1"
+
         fi
 
-        echo "Gradle: $GRADLE_VERSION"
-        echo "Java runtime: $JAVA_VERSION"
+        echo ""
+        echo "=========================================="
+        echo "Configurazione Gradle rilevata"
+        echo "=========================================="
+        echo "Gradle:    $GRADLE_VERSION"
+        echo "Java:      $JAVA_VERSION"
         echo "CycloneDX: $CYCLONEDX_VERSION"
+        echo "=========================================="
+        echo ""
 
         echo "gradle_version=$GRADLE_VERSION" >> "$GITHUB_OUTPUT"
         echo "java_version=$JAVA_VERSION" >> "$GITHUB_OUTPUT"
         echo "cyclonedx_version=$CYCLONEDX_VERSION" >> "$GITHUB_OUTPUT"
-
     - name: Setup Java for Gradle
       if: ${{ env.FORMAT_TYPE == 'gradle' || env.FORMAT_TYPE == 'entrambi' }}
       uses: actions/setup-java@v5
@@ -464,17 +504,6 @@ jobs:
             '' \
             'rootProject {' \
             '    apply plugin: CyclonedxPlugin' \
-            '}' \
-            '' \
-            'allprojects {' \
-            '    configurations.configureEach {' \
-            '        attributes {' \
-            '            attribute(' \
-            '                org.gradle.api.attributes.Attribute.of("org.gradle.jvm.environment", String),' \
-            '                "standard-jvm"' \
-            '            )' \
-            '        }' \
-            '    }' \
             '}' \
             > /tmp/init-cyclonedx.gradle
 
