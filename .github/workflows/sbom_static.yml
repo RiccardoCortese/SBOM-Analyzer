@@ -502,7 +502,7 @@ jobs:
           }
 
           rootProject {
-              apply plugin: org.cyclonedx.gradle.CyclonedxPlugin
+              apply plugin: CyclonedxPlugin
           }
         EOF
 
