@@ -491,13 +491,14 @@ jobs:
           # ======================================================
 
           cat > /tmp/init-cyclonedx.gradle <<EOF
+          import org.cyclonedx.gradle.CyclonedxPlugin
           initscript {
               repositories {
                   gradlePluginPortal()
               }
 
               dependencies {
-                  classpath "org.cyclonedx.bom:org.cyclonedx.bom.gradle.plugin:${{ steps.detect-gradle-java.outputs.cyclonedx_version }}"
+                  classpath "org.cyclonedx.bom\:org.cyclonedx.bom.gradle.plugin:1.6.1"
               }
           }
 
