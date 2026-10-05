@@ -506,7 +506,7 @@ jobs:
           rootProject {
               apply plugin: CyclonedxPlugin
           }
-          EOF
+        EOF
 
           echo "Initialization script CycloneDX:"
           cat /tmp/init-cyclonedx.gradle
