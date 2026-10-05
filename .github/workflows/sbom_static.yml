@@ -499,8 +499,6 @@ jobs:
         # ======================================================
 
         cat > /tmp/init-cyclonedx.gradle <<'EOF'
-        import org.cyclonedx.gradle.CyclonedxPlugin
-
         initscript {
             repositories {
                 gradlePluginPortal()
@@ -512,12 +510,12 @@ jobs:
         }
 
         rootProject {
-            apply plugin: CyclonedxPlugin
+            apply plugin: 'org.cyclonedx.bom'
         }
         EOF
 
-        echo "Initialization script CycloneDX:"
-        cat /tmp/init-cyclonedx.gradle
+          echo "Initialization script CycloneDX:"
+          cat /tmp/init-cyclonedx.gradle
 
         # ======================================================
         # Generazione SBOM
