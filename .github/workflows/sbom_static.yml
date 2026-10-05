@@ -430,14 +430,15 @@ jobs:
       with:
         distribution: temurin
         java-version: ${{ steps.detect-gradle-java.outputs.java_version }}
-
     - name: Process Gradle SBOMs
       if: ${{ env.FORMAT_TYPE == 'gradle' || env.FORMAT_TYPE == 'entrambi' }}
       run: |
         mkdir -p "${{ env.OUTPUT_DIR }}"
 
-        # Cerca il build.gradle/build.gradle.kts del progetto.
-        # Prima prova nella root del repository.
+        # ======================================================
+        # Cerca il build.gradle/build.gradle.kts
+        # ======================================================
+
         GRADLE_PATH=""
 
         if [ -f "repo_esterna/build.gradle" ]; then
@@ -451,124 +452,125 @@ jobs:
             | head -n 1)
         fi
 
-        if [ -n "$GRADLE_PATH" ] && [ -f "$GRADLE_PATH" ]; then
+        if [ -z "$GRADLE_PATH" ] || [ ! -f "$GRADLE_PATH" ]; then
+          echo "Skipping Gradle: build.gradle/build.gradle.kts non trovato."
+          exit 0
+        fi
 
-          echo "File Gradle trovato: $GRADLE_PATH"
+        echo "File Gradle trovato: $GRADLE_PATH"
 
-          DIR_PATH=$(dirname "$GRADLE_PATH")
-          echo "Directory progetto Gradle: $DIR_PATH"
+        DIR_PATH=$(dirname "$GRADLE_PATH")
+        echo "Directory progetto Gradle: $DIR_PATH"
 
-          cd "$DIR_PATH"
+        cd "$DIR_PATH"
 
-          # ======================================================
-          # Cerca il Gradle Wrapper
-          # ======================================================
+        # ======================================================
+        # Cerca il Gradle Wrapper
+        # ======================================================
 
-          GRADLE_CMD=""
+        GRADLE_CMD=""
 
-          if [ -f "./gradlew" ]; then
-            echo "Gradle Wrapper trovato."
-            chmod +x ./gradlew
-            GRADLE_CMD="./gradlew"
-          elif [ -f "../gradlew" ]; then
-            echo "Gradle Wrapper trovato nella directory padre."
-            chmod +x ../gradlew
-            GRADLE_CMD="../gradlew"
-          elif command -v gradle >/dev/null 2>&1; then
-            echo "Gradle Wrapper non trovato. Uso Gradle installato sul runner."
-            GRADLE_CMD="gradle"
-          else
-            echo "ERRORE: Gradle non trovato."
-            exit 1
-          fi
+        if [ -f "./gradlew" ]; then
+          echo "Gradle Wrapper trovato."
+          chmod +x ./gradlew
+          GRADLE_CMD="./gradlew"
 
-          echo "Gradle command: $GRADLE_CMD"
+        elif [ -f "../gradlew" ]; then
+          echo "Gradle Wrapper trovato nella directory padre."
+          chmod +x ../gradlew
+          GRADLE_CMD="../gradlew"
 
-          # ======================================================
-          # Crea initialization script CycloneDX
-          #
-          # CycloneDX 3.x supporta Gradle 8.4+
-          # ======================================================
-
-          cat > /tmp/init-cyclonedx.gradle <<EOF
-          initscript {
-              repositories {
-                  gradlePluginPortal()
-              }
-
-              dependencies {
-                  classpath "org.cyclonedx.bom\:org.cyclonedx.bom.gradle.plugin:1.6.1"
-              }
-          }
-
-          import org.cyclonedx.gradle.CyclonedxPlugin
-
-          rootProject {
-              apply plugin: CyclonedxPlugin
-          }
-        EOF
-
-          echo "Initialization script CycloneDX:"
-          cat /tmp/init-cyclonedx.gradle
-          echo "Initialization script CycloneDX:"
-          cat /tmp/init-cyclonedx.gradle
-
-          # ======================================================
-          # Generazione SBOM
-          # ======================================================
-
-          echo "Generazione SBOM CycloneDX..."
-
-          "$GRADLE_CMD" cyclonedxBom \
-            --init-script /tmp/init-cyclonedx.gradle \
-            --no-daemon
-
-          # ======================================================
-          # Recupero SBOM aggregato
-          # ======================================================
-
-          OUTPUT_FILE="${{ github.workspace }}/${{ env.OUTPUT_DIR }}/trivy_gradle.json"
-
-          if [ -f "build/reports/cyclonedx/bom.json" ]; then
-
-            echo "SBOM aggregato trovato:"
-            echo "build/reports/cyclonedx/bom.json"
-
-            cp \
-              "build/reports/cyclonedx/bom.json" \
-              "$OUTPUT_FILE"
-
-          else
-
-            echo "SBOM aggregato non trovato nel percorso standard."
-
-            BOM_FILE=$(find . \
-              -path "*/build/reports/cyclonedx/bom.json" \
-              -not -path "*/build/*/build/*" \
-              | head -n 1)
-
-            if [ -n "$BOM_FILE" ] && [ -f "$BOM_FILE" ]; then
-
-              echo "SBOM trovato: $BOM_FILE"
-
-              cp "$BOM_FILE" "$OUTPUT_FILE"
-
-            else
-
-              echo "ERRORE: nessun bom.json CycloneDX trovato."
-              exit 1
-
-            fi
-          fi
-
-          echo "SBOM Gradle generato:"
-          ls -lh "$OUTPUT_FILE"
-
-          cd -
+        elif command -v gradle >/dev/null 2>&1; then
+          echo "Gradle Wrapper non trovato."
+          echo "Uso Gradle installato sul runner."
+          GRADLE_CMD="gradle"
 
         else
-          echo "Skipping Gradle: build.gradle/build.gradle.kts non trovato."
+          echo "ERRORE: Gradle non trovato."
+          exit 1
         fi
+
+        echo "Gradle command: $GRADLE_CMD"
+
+        # ======================================================
+        # Init script CycloneDX
+        #
+        # Gradle 7.2 -> CycloneDX 1.6.1
+        # ======================================================
+
+        cat > /tmp/init-cyclonedx.gradle <<'EOF'
+        import org.cyclonedx.gradle.CyclonedxPlugin
+
+        initscript {
+            repositories {
+                gradlePluginPortal()
+            }
+
+            dependencies {
+                classpath 'org.cyclonedx.bom:org.cyclonedx.bom.gradle.plugin:1.6.1'
+            }
+        }
+
+        rootProject {
+            apply plugin: CyclonedxPlugin
+        }
+        EOF
+
+        echo "Initialization script CycloneDX:"
+        cat /tmp/init-cyclonedx.gradle
+
+        # ======================================================
+        # Generazione SBOM
+        # ======================================================
+
+        echo "Generazione SBOM CycloneDX..."
+
+        "$GRADLE_CMD" cyclonedxBom \
+          --init-script /tmp/init-cyclonedx.gradle \
+          --no-daemon
+
+        # ======================================================
+        # Recupero SBOM aggregato
+        # ======================================================
+
+        OUTPUT_FILE="${{ github.workspace }}/${{ env.OUTPUT_DIR }}/trivy_gradle.json"
+
+        if [ -f "build/reports/cyclonedx/bom.json" ]; then
+
+          echo "SBOM aggregato trovato:"
+          echo "build/reports/cyclonedx/bom.json"
+
+          cp \
+            "build/reports/cyclonedx/bom.json" \
+            "$OUTPUT_FILE"
+
+        else
+
+          echo "SBOM aggregato non trovato nel percorso standard."
+
+          BOM_FILE=$(find . \
+            -path "*/build/reports/cyclonedx/bom.json" \
+            -not -path "*/build/*/build/*" \
+            | head -n 1)
+
+          if [ -n "$BOM_FILE" ] && [ -f "$BOM_FILE" ]; then
+
+            echo "SBOM trovato: $BOM_FILE"
+
+            cp "$BOM_FILE" "$OUTPUT_FILE"
+
+          else
+
+            echo "ERRORE: nessun bom.json CycloneDX trovato."
+            exit 1
+
+          fi
+        fi
+
+        echo "SBOM Gradle generato:"
+        ls -lh "$OUTPUT_FILE"
+
+        cd -
 
     # ============================================================
     # CARICAMENTO RISULTATI COMPLETI
