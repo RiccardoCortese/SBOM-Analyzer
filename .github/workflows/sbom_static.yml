@@ -315,261 +315,134 @@ jobs:
       id: detect-gradle-java
       if: ${{ env.FORMAT_TYPE == 'gradle' || env.FORMAT_TYPE == 'entrambi' }}
       run: |
-        GRADLE_PROPERTIES=$(find "$(pwd)/repo_esterna" \
-          -path "*/gradle/wrapper/gradle-wrapper.properties" \
-          -not -path "*/build/*" \
-          | head -n 1)
+        ROOT="$(pwd)/repo_esterna"
 
-        if [ -z "$GRADLE_PROPERTIES" ]; then
-          echo "Gradle Wrapper non trovato."
-          echo "Uso fallback: Java 17 / CycloneDX 3.4.1"
+        # Sceglie il file con il percorso più corto (= più vicino alla radice)
+        shortest() { awk '{print length, $0}' | sort -n | head -n 1 | cut -d' ' -f2-; }
 
-          echo "gradle_version=unknown" >> "$GITHUB_OUTPUT"
-          echo "java_version=17" >> "$GITHUB_OUTPUT"
-          echo "cyclonedx_version=3.4.1" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
+        WRAPPER_PROPS=$(find "$ROOT" -path "*/gradle/wrapper/gradle-wrapper.properties" \
+          -not -path "*/build/*" | shortest)
 
-        echo "Gradle wrapper properties: $GRADLE_PROPERTIES"
-
-        GRADLE_VERSION=$(grep '^distributionUrl=' "$GRADLE_PROPERTIES" \
-          | sed -E 's/.*gradle-([0-9]+\.[0-9]+(\.[0-9]+)?)-.*/\1/')
-
-        if [ -z "$GRADLE_VERSION" ]; then
-          echo "Impossibile rilevare la versione Gradle."
-          exit 1
-        fi
-
-        echo "Versione Gradle rilevata: $GRADLE_VERSION"
-
-        GRADLE_MAJOR=$(echo "$GRADLE_VERSION" | cut -d. -f1)
-        GRADLE_MINOR=$(echo "$GRADLE_VERSION" | cut -d. -f2)
-
-        JAVA_VERSION=""
-        CYCLONEDX_VERSION=""
-
-        # =====================================================
-        # Gradle < 7.3
-        # Java 11
-        # CycloneDX 1.6.1
-        # =====================================================
-        if [ "$GRADLE_MAJOR" -lt 7 ] || \
-           { [ "$GRADLE_MAJOR" -eq 7 ] && [ "$GRADLE_MINOR" -lt 3 ]; }; then
-
-          JAVA_VERSION="11"
-          CYCLONEDX_VERSION="1.6.1"
-
-        # =====================================================
-        # Gradle 7.3 - 7.x
-        # Java 17
-        # CycloneDX 1.6.1
-        # =====================================================
-        elif [ "$GRADLE_MAJOR" -eq 7 ]; then
-
-          JAVA_VERSION="17"
-          CYCLONEDX_VERSION="1.6.1"
-
-        # =====================================================
-        # Gradle 8.0 - 8.3
-        # Java 17
-        # CycloneDX 2.4.1
-        # =====================================================
-        elif [ "$GRADLE_MAJOR" -eq 8 ] && [ "$GRADLE_MINOR" -lt 4 ]; then
-
-          JAVA_VERSION="17"
-          CYCLONEDX_VERSION="2.4.1"
-
-        # =====================================================
-        # Gradle 8.4 - 8.x
-        # Java 17
-        # CycloneDX 3.4.1
-        # =====================================================
-        elif [ "$GRADLE_MAJOR" -eq 8 ]; then
-
-          JAVA_VERSION="17"
-          CYCLONEDX_VERSION="3.4.1"
-
-        # =====================================================
-        # Gradle 9.0.x
-        # Java 21
-        # CycloneDX 3.4.1
-        # =====================================================
-        elif [ "$GRADLE_MAJOR" -eq 9 ] && [ "$GRADLE_MINOR" -lt 1 ]; then
-
-          JAVA_VERSION="21"
-          CYCLONEDX_VERSION="3.4.1"
-
-        # =====================================================
-        # Gradle 9.1+
-        # Java 25
-        # CycloneDX 3.4.1
-        # =====================================================
+        PROJECT_DIR=""
+        if [ -n "$WRAPPER_PROPS" ]; then
+          PROJECT_DIR=$(dirname "$(dirname "$(dirname "$WRAPPER_PROPS")")")
         else
-
-          JAVA_VERSION="25"
-          CYCLONEDX_VERSION="3.4.1"
-
+          F=$(find "$ROOT" \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+            -not -path "*/build/*" | shortest)
+          [ -z "$F" ] && F=$(find "$ROOT" \( -name "build.gradle" -o -name "build.gradle.kts" \) \
+            -not -path "*/build/*" | shortest)
+          [ -n "$F" ] && PROJECT_DIR=$(dirname "$F")
         fi
 
-        echo ""
-        echo "=========================================="
-        echo "Configurazione Gradle rilevata"
-        echo "=========================================="
-        echo "Gradle:    $GRADLE_VERSION"
-        echo "Java:      $JAVA_VERSION"
-        echo "CycloneDX: $CYCLONEDX_VERSION"
-        echo "=========================================="
-        echo ""
+        GRADLE_VERSION="unknown"
+        if [ -n "$WRAPPER_PROPS" ]; then
+          V=$(grep '^distributionUrl=' "$WRAPPER_PROPS" \
+            | sed -nE 's/.*gradle-([0-9]+\.[0-9]+(\.[0-9]+)?).*/\1/p')
+          [ -n "$V" ] && GRADLE_VERSION="$V"
+        fi
 
-        echo "gradle_version=$GRADLE_VERSION" >> "$GITHUB_OUTPUT"
-        echo "java_version=$JAVA_VERSION" >> "$GITHUB_OUTPUT"
-        echo "cyclonedx_version=$CYCLONEDX_VERSION" >> "$GITHUB_OUTPUT"
+        if [ "$GRADLE_VERSION" = "unknown" ]; then
+          # Senza wrapper si usa il Gradle del runner: scelta prudente
+          JAVA_VERSION="17"; CDX_VERSION="3.4.1"
+        else
+          MAJOR=$(echo "$GRADLE_VERSION" | cut -d. -f1)
+          MINOR=$(echo "$GRADLE_VERSION" | cut -d. -f2)
+          MINOR=${MINOR:-0}
+
+          if   [ "$MAJOR" -lt 5 ]; then JAVA_VERSION="8";  CDX_VERSION="1.6.1"
+          elif [ "$MAJOR" -lt 7 ] || { [ "$MAJOR" -eq 7 ] && [ "$MINOR" -lt 3 ]; }; then
+                                         JAVA_VERSION="11"; CDX_VERSION="1.6.1"
+          elif [ "$MAJOR" -eq 7 ];    then JAVA_VERSION="17"; CDX_VERSION="1.6.1"
+          elif [ "$MAJOR" -eq 8 ] && [ "$MINOR" -lt 4 ]; then
+                                         JAVA_VERSION="17"; CDX_VERSION="2.4.1"
+          elif [ "$MAJOR" -eq 8 ];    then JAVA_VERSION="17"; CDX_VERSION="3.4.1"
+          elif [ "$MAJOR" -eq 9 ] && [ "$MINOR" -lt 1 ]; then
+                                         JAVA_VERSION="21"; CDX_VERSION="3.4.1"
+          else                            JAVA_VERSION="25"; CDX_VERSION="3.4.1"
+          fi
+        fi
+
+        echo "Dir: ${PROJECT_DIR:-<nessuna>} | Gradle: $GRADLE_VERSION | Java: $JAVA_VERSION | CycloneDX: $CDX_VERSION"
+
+        {
+          echo "project_dir=$PROJECT_DIR"
+          echo "gradle_version=$GRADLE_VERSION"
+          echo "java_version=$JAVA_VERSION"
+          echo "cyclonedx_version=$CDX_VERSION"
+        } >> "$GITHUB_OUTPUT"
+
     - name: Setup Java for Gradle
       if: ${{ env.FORMAT_TYPE == 'gradle' || env.FORMAT_TYPE == 'entrambi' }}
       uses: actions/setup-java@v5
       with:
         distribution: temurin
         java-version: ${{ steps.detect-gradle-java.outputs.java_version }}
+
     - name: Process Gradle SBOMs
       if: ${{ env.FORMAT_TYPE == 'gradle' || env.FORMAT_TYPE == 'entrambi' }}
+      env:
+        PROJECT_DIR: ${{ steps.detect-gradle-java.outputs.project_dir }}
+        CDX_VERSION: ${{ steps.detect-gradle-java.outputs.cyclonedx_version }}
       run: |
-        mkdir -p "${{ env.OUTPUT_DIR }}"
+        OUT_DIR="${{ github.workspace }}/${{ env.OUTPUT_DIR }}"
+        mkdir -p "$OUT_DIR"
 
-        # ======================================================
-        # Cerca il build.gradle/build.gradle.kts
-        # ======================================================
-
-        GRADLE_PATH=""
-
-        if [ -f "repo_esterna/build.gradle" ]; then
-          GRADLE_PATH="repo_esterna/build.gradle"
-        elif [ -f "repo_esterna/build.gradle.kts" ]; then
-          GRADLE_PATH="repo_esterna/build.gradle.kts"
-        else
-          GRADLE_PATH=$(find "$(pwd)/repo_esterna" \
-            \( -name "build.gradle" -o -name "build.gradle.kts" \) \
-            -not -path "*/build/*" \
-            | head -n 1)
-        fi
-
-        if [ -z "$GRADLE_PATH" ] || [ ! -f "$GRADLE_PATH" ]; then
-          echo "Skipping Gradle: build.gradle/build.gradle.kts non trovato."
+        if [ -z "$PROJECT_DIR" ] || [ ! -d "$PROJECT_DIR" ]; then
+          echo "Skipping Gradle: nessun progetto Gradle trovato."
           exit 0
         fi
 
-        echo "File Gradle trovato: $GRADLE_PATH"
+        cd "$PROJECT_DIR"
 
-        DIR_PATH=$(dirname "$GRADLE_PATH")
-        echo "Directory progetto Gradle: $DIR_PATH"
-
-        cd "$DIR_PATH"
-
-        # ======================================================
-        # Cerca il Gradle Wrapper
-        # ======================================================
-
-        GRADLE_CMD=""
-
-        if [ -f "./gradlew" ]; then
-          echo "Gradle Wrapper trovato."
-          chmod +x ./gradlew
-          GRADLE_CMD="./gradlew"
-
-        elif [ -f "../gradlew" ]; then
-          echo "Gradle Wrapper trovato nella directory padre."
-          chmod +x ../gradlew
-          GRADLE_CMD="../gradlew"
-
+        if [ -f ./gradlew ]; then
+          chmod +x ./gradlew; GRADLE_CMD="./gradlew"
         elif command -v gradle >/dev/null 2>&1; then
-          echo "Gradle Wrapper non trovato."
-          echo "Uso Gradle installato sul runner."
           GRADLE_CMD="gradle"
-
         else
-          echo "ERRORE: Gradle non trovato."
-          exit 1
+          echo "Gradle non disponibile, uso Trivy come fallback."
+          trivy fs --format cyclonedx --output "$OUT_DIR/trivy_gradle.json" .
+          exit 0
         fi
 
-        echo "Gradle command: $GRADLE_CMD"
-
-        # ======================================================
-        # Init script CycloneDX
-        #
-        # Gradle 7.2 -> CycloneDX 1.6.1
-        # ======================================================
-
-        cat > /tmp/init-cyclonedx.gradle <<'EOF'
+        # Init script: heredoc senza apici per espandere ${CDX_VERSION}
+        cat > /tmp/init-cyclonedx.gradle <<EOF
         initscript {
             repositories {
+                mavenCentral()
                 gradlePluginPortal()
             }
-
             dependencies {
-                classpath 'org.cyclonedx.bom:org.cyclonedx.bom.gradle.plugin:1.6.1'
+                classpath 'org.cyclonedx:cyclonedx-gradle-plugin:${CDX_VERSION}'
             }
         }
-
-        rootProject {
-            apply plugin: 'org.cyclonedx.bom'
+        allprojects {
+            apply plugin: org.cyclonedx.gradle.CycloneDxPlugin
         }
         EOF
 
-          echo "Initialization script CycloneDX:"
-          cat /tmp/init-cyclonedx.gradle
+        OK=true
+        "$GRADLE_CMD" cyclonedxBom --init-script /tmp/init-cyclonedx.gradle \
+          --no-daemon --continue || OK=false
 
-        # ======================================================
-        # Generazione SBOM
-        # ======================================================
+        # Raccolta BOM: plugin 1.x -> build/reports/bom.json, 2.x/3.x -> build/reports/cyclonedx/bom.json
+        BOMS=$(find . -type f -name "bom.json" -path "*/build/reports/*" | awk '{print length, $0}' | sort -n | cut -d' ' -f2-)
 
-        echo "Generazione SBOM CycloneDX..."
+        if [ -n "$BOMS" ]; then
+          ROOT_BOM=$(echo "$BOMS" | head -n 1)
+          cp "$ROOT_BOM" "$OUT_DIR/trivy_gradle.json"
+          echo "SBOM principale: $ROOT_BOM"
 
-        "$GRADLE_CMD" cyclonedxBom \
-          --init-script /tmp/init-cyclonedx.gradle \
-          --no-daemon
-
-        # ======================================================
-        # Recupero SBOM aggregato
-        # ======================================================
-
-        OUTPUT_FILE="${{ github.workspace }}/${{ env.OUTPUT_DIR }}/trivy_gradle.json"
-
-        if [ -f "build/reports/cyclonedx/bom.json" ]; then
-
-          echo "SBOM aggregato trovato:"
-          echo "build/reports/cyclonedx/bom.json"
-
-          cp \
-            "build/reports/cyclonedx/bom.json" \
-            "$OUTPUT_FILE"
-
+          # Eventuali sotto-moduli, salvati con nome distinto
+          i=1
+          echo "$BOMS" | tail -n +2 | while read -r B; do
+            cp "$B" "$OUT_DIR/trivy_gradle_module_${i}.json"; i=$((i+1))
+          done
         else
-
-          echo "SBOM aggregato non trovato nel percorso standard."
-
-          BOM_FILE=$(find . \
-            -path "*/build/reports/cyclonedx/bom.json" \
-            -not -path "*/build/*/build/*" \
-            | head -n 1)
-
-          if [ -n "$BOM_FILE" ] && [ -f "$BOM_FILE" ]; then
-
-            echo "SBOM trovato: $BOM_FILE"
-
-            cp "$BOM_FILE" "$OUTPUT_FILE"
-
-          else
-
-            echo "ERRORE: nessun bom.json CycloneDX trovato."
-            exit 1
-
-          fi
+          echo "Generazione nativa fallita (OK=$OK), fallback su Trivy."
+          trivy fs --format cyclonedx --output "$OUT_DIR/trivy_gradle.json" .
         fi
 
-        echo "SBOM Gradle generato:"
-        ls -lh "$OUTPUT_FILE"
-
-        cd -
-
+        ls -lh "$OUT_DIR"
     # ============================================================
     # CARICAMENTO RISULTATI COMPLETI
     # ============================================================
