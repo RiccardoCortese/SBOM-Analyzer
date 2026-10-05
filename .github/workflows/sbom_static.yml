@@ -491,7 +491,6 @@ jobs:
           # ======================================================
 
           cat > /tmp/init-cyclonedx.gradle <<EOF
-          import org.cyclonedx.gradle.CyclonedxPlugin
           initscript {
               repositories {
                   gradlePluginPortal()
@@ -502,10 +501,12 @@ jobs:
               }
           }
 
+          import org.cyclonedx.gradle.CyclonedxPlugin
+
           rootProject {
               apply plugin: CyclonedxPlugin
           }
-        EOF
+          EOF
 
           echo "Initialization script CycloneDX:"
           cat /tmp/init-cyclonedx.gradle
