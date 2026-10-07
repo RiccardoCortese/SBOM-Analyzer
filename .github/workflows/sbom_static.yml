@@ -307,7 +307,12 @@ jobs:
         if [ -n "$POM_PATH" ] && [ -f "$POM_PATH" ]; then
           echo "pom.xml trovato: $POM_PATH"
           DIR_PATH=$(dirname "$POM_PATH")
-
+          echo "pom.xml trovato: $POM_PATH"
+          echo "Java:"
+          java -version
+          echo "Maven:"
+          mvn -version
+          echo "Esecuzione CycloneDX..."
           cd "$DIR_PATH"
           # Generazione nativa tramite il plugin CycloneDX Maven
           mvn org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom -Dcyclonedx.skip=false
