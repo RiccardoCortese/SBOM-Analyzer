@@ -74,44 +74,6 @@ jobs:
         pip install uv 
         curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
     
-
-    # ============================================================
-    # PREPARAZIONE CACHE MAVEN PER LA BASELINE
-    # ============================================================
-    - name: Prepare Maven cache for baseline
-      if: ${{ env.FORMAT_TYPE == 'tutto' || env.FORMAT_TYPE == 'all' }}
-      uses: actions/setup-java@v5
-      with:
-        distribution: temurin
-        java-version: '17'
-        cache: maven
-
-    - name: Resolve Maven dependencies for baseline
-      if: ${{ env.FORMAT_TYPE == 'tutto' || env.FORMAT_TYPE == 'all' }}
-      run: |
-        ROOT="repo_esterna"
-
-        POM_PATH=$(find "$ROOT" \
-          -name "pom.xml" \
-          -not -path "*/target/*" \
-          | head -n 1)
-
-        if [ -n "$POM_PATH" ]; then
-          echo "Progetto Maven rilevato: $POM_PATH"
-
-          DIR_PATH=$(dirname "$POM_PATH")
-          cd "$DIR_PATH"
-
-          echo "Pre-caricamento dipendenze Maven..."
-
-          mvn dependency:resolve -DskipTests || \
-            echo "[WARNING] dependency:resolve fallito. Continuo comunque con Trivy."
-
-          cd -
-        else
-          echo "Nessun progetto Maven rilevato."
-        fi
-
     # ============================================================
     # BASELINE CLASSICA - TRIVY FS DELL'INTERO REPOSITORY
     # ============================================================
@@ -124,14 +86,11 @@ jobs:
 
         trivy fs \
           --format cyclonedx \
-          --scanners vuln \
           --output "${{ env.OUTPUT_DIR }}/trivy_fs_all.json" \
           repo_esterna
 
         echo "Baseline generata:"
         ls -lh "${{ env.OUTPUT_DIR }}/trivy_fs_all.json"
-
-
 
     # ============================================================
     # ESECUZIONE POETRY 
