@@ -307,25 +307,44 @@ jobs:
         if [ -n "$POM_PATH" ] && [ -f "$POM_PATH" ]; then
           echo "pom.xml trovato: $POM_PATH"
           DIR_PATH=$(dirname "$POM_PATH")
-          echo "pom.xml trovato: $POM_PATH"
-          echo "Java:"
+
+          # ============================================================
+          # DIAGNOSTICA MAVEN
+          # ============================================================
+          echo "=== JAVA ==="
           java -version
-          echo "Maven:"
-          mvn -version
-          echo "Esecuzione CycloneDX..."
+
+          echo "=== MAVEN LOCATION ==="
+          which mvn
+
+          echo "=== MAVEN VERSION ==="
+          mvn --version || true
+
+          echo "=== MAVEN HOME ==="
+          echo "${MAVEN_HOME:-<non impostato>}"
+
+          echo "=== POM ==="
+          echo "$POM_PATH"
+
+          echo "=== AWS JAVA SDK CORE NEL POM ==="
+          grep -n -B 5 -A 8 "aws-java-sdk-core" "$POM_PATH" || true
+
+          echo "=== ESECUZIONE CYCLONEDX ==="
+
           cd "$DIR_PATH"
+
           # Generazione nativa tramite il plugin CycloneDX Maven
           mvn org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom -Dcyclonedx.skip=false
 
-          # Individua il file generato (di default target/bom.json o target/cyclonedx/bom.json)
+          # Individua il file generato
           if [ -f "target/bom.json" ]; then
             cp target/bom.json "${{ github.workspace }}/${{ env.OUTPUT_DIR }}/trivy_maven.json"
           elif [ -f "target/cyclonedx/bom.json" ]; then
             cp target/cyclonedx/bom.json "${{ github.workspace }}/${{ env.OUTPUT_DIR }}/trivy_maven.json"
           else
-            # Fallback generico se la struttura varia
             find target -name "bom.json" -exec cp {} "${{ github.workspace }}/${{ env.OUTPUT_DIR }}/trivy_maven.json" \;
           fi
+
           cd -
         else
           echo "Skipping Maven: pom.xml non trovato."
