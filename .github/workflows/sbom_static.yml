@@ -74,23 +74,55 @@ jobs:
         pip install uv 
         curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
     
-    # ============================================================
-    # BASELINE CLASSICA - TRIVY FS DELL'INTERO REPOSITORY
-    # ============================================================
-    - name: Baseline SBOM - Trivy filesystem
-      if: ${{ env.FORMAT_TYPE == 'tutto' || env.FORMAT_TYPE == 'all' }}
+    - name: Setup Java per baseline (solo progetti Maven)
+      if: ${{ (env.FORMAT_TYPE == 'tutto' || env.FORMAT_TYPE == 'all' || env.FORMAT_TYPE == 'entrambi') && hashFiles('repo_esterna/**/pom.xml') != '' }}
+      uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: '17'
+        cache: maven
+ 
+    # Evita il 429 di Maven Central: popola ~/.m2 passando da un mirror
+    - name: Popola cache Maven (solo progetti Maven)
+      if: ${{ (env.FORMAT_TYPE == 'tutto' || env.FORMAT_TYPE == 'all' || env.FORMAT_TYPE == 'entrambi') && hashFiles('repo_esterna/**/pom.xml') != '' }}
       run: |
-        mkdir -p "${{ env.OUTPUT_DIR }}"
-
-        echo "Generazione baseline Trivy sull'intero repository..."
-
-        trivy fs \
-          --format cyclonedx \
-          --output "${{ env.OUTPUT_DIR }}/trivy_fs_all.json" \
-          repo_esterna
-
-        echo "Baseline generata:"
-        ls -lh "${{ env.OUTPUT_DIR }}/trivy_fs_all.json"
+        mkdir -p ~/.m2
+        cat > ~/.m2/settings.xml <<'EOF'
+        <settings>
+          <mirrors>
+            <mirror>
+              <id>google-central</id>
+              <name>Maven Central (mirror Google)</name>
+              <url>https://maven-central.storage-download.googleapis.com/maven2/</url>
+              <mirrorOf>central</mirrorOf>
+            </mirror>
+          </mirrors>
+        </settings>
+        EOF
+ 
+        cd repo_esterna
+        mvn -B -q -fae -DskipTests dependency:resolve || echo "Risoluzione Maven parziale, procedo con la scansione."
+ 
+    - name: Baseline SBOM - Trivy filesystem
+      if: ${{ env.FORMAT_TYPE == 'tutto' || env.FORMAT_TYPE == 'all' || env.FORMAT_TYPE == 'entrambi' }}
+      run: |
+        mkdir -p "${{ github.workspace }}/${{ env.OUTPUT_DIR }}"
+        export OUT="${{ github.workspace }}/${{ env.OUTPUT_DIR }}/trivy_fs_all.json"
+ 
+        cd repo_esterna
+        trivy fs --offline-scan --timeout 30m --format cyclonedx --output "$OUT" .
+ 
+        echo "=== Componenti nella baseline, per tipo ==="
+        python3 - <<'EOF'
+        import json, os, re, collections
+        d = json.load(open(os.environ["OUT"]))
+        c = collections.Counter(
+            re.match(r"pkg:([^/]+)/", x["purl"]).group(1)
+            for x in d.get("components", []) if x.get("purl")
+        )
+        print(dict(c) if c else "NESSUN COMPONENTE CON PURL")
+        EOF
+ 
 
     # ============================================================
     # ESECUZIONE POETRY 
@@ -485,6 +517,29 @@ jobs:
         fi
 
         ls -lh "$OUT_DIR"
+
+    - name: Checkout repository del tool (script di confronto)
+      if: ${{ !cancelled() && env.FORMAT_TYPE == 'entrambi' }}
+      uses: actions/checkout@v4
+      with:
+        path: tool_repo
+ 
+    - name: Confronto intero repository vs scansioni per manifest
+      if: ${{ !cancelled() && env.FORMAT_TYPE == 'entrambi' }}
+      run: |
+        mkdir -p comparison_output
+        python3 tool_repo/scripts/compare_scans.py \
+          --fs "${{ env.OUTPUT_DIR }}/trivy_fs_all.json" \
+          --manifests-dir "${{ env.OUTPUT_DIR }}" \
+          --out-dir comparison_output
+ 
+    # Nome senza "sbom"/"results"/"trivy": il backend non lo scambia per gli SBOM
+    - name: Upload report di confronto
+      if: ${{ !cancelled() && env.FORMAT_TYPE == 'entrambi' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: scan-comparison
+        path: comparison_output/*
     # ============================================================
     # CARICAMENTO RISULTATI COMPLETI
     # ============================================================
