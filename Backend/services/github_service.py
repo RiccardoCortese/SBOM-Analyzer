@@ -3,9 +3,10 @@ import time
 import shutil
 import zipfile
 import requests
+import json
 from typing import Optional
 from config import GITHUB_API, MY_GITHUB_OWNER, MY_GITHUB_REPO, GITHUB_REF, STORAGE_DIR
-
+from utils.purl_utils import normalize_sbom_purls
 # ============================================================
 # AUTH GITHUB
 # ============================================================
@@ -64,6 +65,16 @@ def trigger_github_action(workflow_file: str, inputs: dict) -> Optional[dict]:
 # ============================================================
 # LOGICA DI POLLING E SCARICAMENTO ARTIFACT
 # ============================================================
+
+# Funzione per normalizzare i purl all'interno di un file SBOM JSON
+def normalize_sbom_file(file_path):
+    with open(file_path, "r", encoding="utf-8") as f:
+        sbom = json.load(f)
+
+    sbom = normalize_sbom_purls(sbom)
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(sbom, f, indent=2, ensure_ascii=False)
 
 def wait_and_download_artifacts(run_id: int, dest_dir: str):
     """Attende il completamento della Run e scarica qualsiasi artifact di tipo SBOM risultante."""
@@ -125,14 +136,24 @@ def wait_and_download_artifacts(run_id: int, dest_dir: str):
                 file_path = os.path.join(dest_dir, file_name)
                 
                 # Smista in base al nome
-                if file_name == "trivy_poetry.json" or file_name == "trivy_requirements.json" or file_name == "trivy_uv.json":
-                    shutil.move(file_path, os.path.join(manifests_dir, file_name))
+                if file_name == "trivy_poetry.json" or file_name == "trivy_requirements.json" or file_name == "trivy_uv.json" or file_name == "trivy_maven.json" or file_name == "trivy_gradle.json" or file_name.startswith("trivy_gradle_module_"):
+                    destination = os.path.join(manifests_dir, file_name)
+                    shutil.move(file_path, destination)
+                    normalize_sbom_file(destination)  # Normalizza i purl all'interno del file SBOM JSON
+                elif file_name == "trivy_fs_all.json":
+                    # Baseline classica (trivy fs .): cartella separata, NON va nel merge
+                    baseline_dir = os.path.join(dest_dir, "baseline")
+                    os.makedirs(baseline_dir, exist_ok=True)
+                    destination = os.path.join(baseline_dir, file_name)
+                    shutil.move(file_path, destination)
+                    normalize_sbom_file(destination)
                 elif file_name != "docker_sbom.json" and file_name != "cyclonedx-license-SBOM.json" and file_name != "cyclonedx-vuln-SBOM.json":
-                    shutil.move(file_path, os.path.join(deps_dir, file_name))
+                    destination = os.path.join(deps_dir, file_name)
+                    shutil.move(file_path, destination)
+                    #normalize_sbom_file(destination)  # Normalizza i purl all'interno del file SBOM JSON
     
     # Rimuovi lo zip dopo aver estratto
     if os.path.exists(zip_path):
         os.remove(zip_path)
         
     return True
-

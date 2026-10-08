@@ -7,7 +7,7 @@ def get_classification_color(classification):
     colors = {
         "declared": "#4CAF50",
         "transitive": "#2196F3",
-        "indirect": "#FF9800",
+        "transitive_unknown": "#FF9800",
         "unknown": "#9E9E9E"
     }
 
@@ -21,7 +21,7 @@ def get_classification_label(classification):
     labels = {
         "declared": "Dichiarata",
         "transitive": "Transitiva",
-        "indirect": "Indiretta",
+        "transitive_unknown": "Transitiva sconosciuta",
         "unknown": "Sconosciuta"
     }
 
@@ -66,9 +66,7 @@ def render_component_provenance(backend_url: str):
             data = res.json()
 
             if data.get("status") != "success":
-                st.error(
-                    "Analisi della provenienza non riuscita."
-                )
+                st.error("Analisi della provenienza non riuscita.")
                 return
             else:
                 st.session_state.dockerfile_analysis = data
@@ -79,21 +77,13 @@ def render_component_provenance(backend_url: str):
     data = st.session_state.dockerfile_analysis
     
     if data is not None:
-        manifest_components = data.get(
-            "manifest_components",
-            {}
-        )
+        manifest_components = data.get("manifest_components",{})
 
-        docker_components = data.get(
-            "docker_components",
-            {}
-        )
+        docker_components = data.get("docker_components", {})
 
         if docker_components:
 
-            st.markdown(
-                "### Componenti introdotti durante la build"
-            )
+            st.markdown("### Componenti introdotti durante la build")
 
             st.info(
                 "Questi componenti sono stati introdotti durante "
@@ -146,10 +136,7 @@ def render_component_provenance(backend_url: str):
             )
 
         else:
-            st.info(
-                "Non sono stati trovati componenti introdotti "
-                "durante gli step Docker."
-            )
+            st.info("Non sono stati trovati componenti introdotti durante gli step Docker.")
 
         
 
@@ -171,17 +158,16 @@ def render_component_provenance(backend_url: str):
             data = res.json()
 
             if data.get("status") != "success":
-                st.error(
-                    "Analisi dei componenti dai manifest non riuscita."
-                )
+                st.error("Analisi dei componenti dai manifest non riuscita.")
                 return
             else:
                 st.session_state.source_component_analysis = data
+
         except requests.RequestException as e:
             st.error(f"Errore di connessione al backend: {e}")
-            
-    data = st.session_state.source_component_analysis 
-    
+
+    data = st.session_state.source_component_analysis
+
     if data is not None:
         not_declared = data.get(
             "not_declared",
@@ -193,8 +179,6 @@ def render_component_provenance(backend_url: str):
             {}
         )
 
-        
-
         # ----------------------------------------------------
         # LEGENDA
         # ----------------------------------------------------
@@ -205,13 +189,13 @@ def render_component_provenance(backend_url: str):
             "Categoria": [
                 "Dichiarata",
                 "Transitiva",
-                "Indiretta",
+                "Transitiva sconosciuta",
                 "Sconosciuta"
             ],
             "Significato": [
                 "Dipendenza dichiarata direttamente nei manifest",
-                "Dipendenza derivata da una componente dichiarata",
-                "Dipendenza derivata da una componente non dichiarata",
+                "Dipendenza derivata da una componente dichiarata, anche attraverso più livelli",
+                "Dipendenza derivata da una componente sconosciuta, anche attraverso più livelli",
                 "Componente senza una relazione di dipendenza identificabile"
             ]
         })
@@ -226,7 +210,30 @@ def render_component_provenance(backend_url: str):
         # STATISTICHE
         # ----------------------------------------------------
 
-        
+        if stats:
+            st.markdown("#### Statistiche")
+
+            col1, col2, col3, col4 = st.columns(4)
+
+            col1.metric(
+                "Dichiarate",
+                stats.get("declared_in_sbom", 0)
+            )
+
+            col2.metric(
+                "Transitive",
+                stats.get("transitive", 0)
+            )
+
+            col3.metric(
+                "Transitive sconosciute",
+                stats.get("transitive_unknown", 0)
+            )
+
+            col4.metric(
+                "Sconosciute",
+                stats.get("unknown", 0)
+            )
 
         # ----------------------------------------------------
         # TABELLA
@@ -291,7 +298,7 @@ def render_component_provenance(backend_url: str):
                     {
                         "Dichiarata": "declared",
                         "Transitiva": "transitive",
-                        "Indiretta": "indirect",
+                        "Transitiva sconosciuta": "transitive_unknown",
                         "Sconosciuta": "unknown"
                     }.get(
                         value,
@@ -312,5 +319,3 @@ def render_component_provenance(backend_url: str):
                 "Non sono stati trovati componenti non presenti "
                 "nei manifest del progetto."
             )
-
-

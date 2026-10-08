@@ -39,7 +39,7 @@ def render_standard_analysis(backend_url: str):
     
     format_type = st.selectbox(
         "Seleziona il formato da cui generare SBOM tramite la pipeline:",
-        options=st.session_state.found_files + ["Entrambi"],
+        options=st.session_state.found_files + ["Tutto"],
         format_func=lambda x: x.capitalize()
     )
     

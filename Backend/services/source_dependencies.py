@@ -1,8 +1,11 @@
 import json
 import os
 import glob
+import fnmatch
 import re
 import urllib.parse
+from collections import deque
+import xml.etree.ElementTree as ET
 
 try:
     import tomllib
@@ -65,7 +68,7 @@ def parse_requirements_file(file_path):
 
         # Nome del pacchetto + eventuale versione
         match = re.match(
-            r"^([A-Za-z0-9][A-Za-z0-9._-]*)\s*"
+            r"^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]+\])?\s*"
             r"((?:==|>=|<=|~=|!=|>|<).*)?$",
             line
         )
@@ -414,6 +417,97 @@ def parse_custom_dependencies_file(file_path, storage_dir=None):
 
     return dependencies
 
+# ============================================================
+# pom.xml (Maven)
+# ============================================================
+
+def parse_pom_file(file_path):
+    dependencies = []
+    try:
+        tree = ET.parse(file_path)
+        root = tree.getroot()
+        
+        # Gestione del namespace Maven (es. http://maven.apache.org/POM/4.0.0)
+        ns = {}
+        if root.tag.startswith('{'):
+            ns_uri = root.tag.tag[1:].split('}')[0] if hasattr(root.tag, 'tag') else root.tag.split('}')[0].strip('{')
+            ns = {'m': ns_uri}
+            tag_prefix = 'm:'
+        else:
+            tag_prefix = ''
+
+        # Cerca tutte le dipendenze nel pom.xml (gestisce sia root che dependencyManagement/dependencies)
+        dep_elements = root.findall(f"{tag_prefix}dependencies/{tag_prefix}dependency", ns)
+        
+        for dep in dep_elements:
+            group_el = dep.find(f"{tag_prefix}groupId", ns)
+            artifact_el = dep.find(f"{tag_prefix}artifactId", ns)
+            version_el = dep.find(f"{tag_prefix}version", ns)
+
+            if group_el is not None and artifact_el is not None:
+                group_id = group_el.text.strip() if group_el.text else None
+                artifact_id = artifact_el.text.strip() if artifact_el.text else None
+                version = version_el.text.strip() if version_el is not None and version_el.text else None
+                
+                # Spesso nei pom padri le versioni usano proprietà tipo ${spring.version}. 
+                # Se non c'è una versione esatta, la lasciamo a None (verrà comunque mappata tramite l'artifact name).
+                if version and version.startswith("${"):
+                    version = None
+
+                dependencies.append({
+                    "name": f"{group_id}:{artifact_id}",
+                    "group": group_id,
+                    "artifact": artifact_id,
+                    "version": version,
+                    "ecosystem": "maven",
+                    "source_file": os.path.basename(file_path),
+                    "source_type": "pom.xml"
+                })
+    except Exception as e:
+        print(f"[SOURCE-DEPENDENCIES] Errore parsing pom.xml {file_path}: {e}", flush=True)
+        
+    return dependencies
+
+
+# ============================================================
+# build.gradle / build.gradle.kts (Gradle)
+# ============================================================
+
+def parse_gradle_file(file_path):
+    dependencies = []
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # Pattern comuni di Gradle: 
+        # implementation 'group:artifact:version' 
+        # implementation("group:artifact:version")
+        # api group: '...', name: '...', version: '...'
+        pattern_string_notation = (
+            r"(?:implementation|api|compile|compileOnly|runtimeOnly|testImplementation|"
+            r"testRuntimeOnly|testCompileOnly|annotationProcessor)"
+            r"\s*\(?\s*['\"]([\w\-\.]+):([\w\-\.]+)(?::([\w\-\.\+\$\{\}]+))?['\"]"
+        )
+        
+        matches = re.findall(pattern_string_notation, content)
+        for group, artifact, version in matches:
+            # versione assente o con variabile (es. $springVersion): non risolvibile
+            if not version or "$" in version:
+                version = None
+            dependencies.append({
+                "name": f"{group}:{artifact}",
+                "group": group,
+                "artifact": artifact,
+                "version": version,
+                "ecosystem": "maven", # Nel mondo SBOM/PURL, Gradle mappa sempre su pkg:maven/
+                "source_file": os.path.basename(file_path),
+                "source_type": "gradle"
+            })
+    except Exception as e:
+        print(f"[SOURCE-DEPENDENCIES] Errore parsing gradle {file_path}: {e}", flush=True)
+
+    return dependencies
+
 
 def resolve_referenced_file(referenced_path, source_file, storage_dir):
 
@@ -509,36 +603,46 @@ def load_source_dependencies(STORAGE_DIR):
 
     dependencies = []
 
+    # I file copiati da upload_sbom hanno il prefisso del percorso
+    # (es. backend_requirements.txt, moduloA_pom.xml): cerchiamo per suffisso.
     patterns = [
-        "requirements.txt",
-        "pyproject.toml"
-        #"dependencies.json"
+        "*requirements*.txt",
+        "*pyproject.toml",
+        "*pom.xml",
+        "*build.gradle",
+        "*build.gradle.kts"
     ]
+
+    seen_files = set()
 
     for pattern in patterns:
 
-        files = glob.glob(
-            os.path.join(
-                STORAGE_DIR,
-                pattern
-            )
-        )
+        files = glob.glob(os.path.join(STORAGE_DIR, pattern))
 
         for file_path in files:
 
+            if file_path in seen_files:
+                continue
+
+            seen_files.add(file_path)
+
             filename = os.path.basename(file_path)
 
-            if filename == "requirements.txt":
+            if fnmatch.fnmatch(filename, "*requirements*.txt"):
 
                 dependencies.extend(parse_requirements_file(file_path))
 
-            elif filename == "pyproject.toml":
+            elif filename.endswith("pyproject.toml"):
 
                 dependencies.extend(parse_pyproject_file(file_path))
 
-            # elif filename == "dependencies.json":
+            elif filename.endswith("pom.xml"):
 
-            #     dependencies.extend(parse_custom_dependencies_file(file_path, STORAGE_DIR))
+                dependencies.extend(parse_pom_file(file_path))
+
+            elif filename.endswith(("build.gradle", "build.gradle.kts")):
+
+                dependencies.extend(parse_gradle_file(file_path))
 
     # Elimina duplicati
     unique = {}
@@ -547,9 +651,7 @@ def load_source_dependencies(STORAGE_DIR):
 
         key = (
             dependency.get("ecosystem"),
-            normalize_name(
-                dependency.get("name")
-            ),
+            normalize_name(dependency.get("name")),
             dependency.get("version")
         )
 
@@ -643,52 +745,60 @@ def get_sbom_dependency_map(sbom):
 # ============================================================
 
 def component_matches_dependency(component, dependency):
-
-    component_name = normalize_name(component.get("name"))
-
-    dependency_name = normalize_name(dependency.get("name"))
-
-    if component_name != dependency_name:
-        return False
-
     ecosystem = dependency.get("ecosystem")
-
     purl = component.get("purl", "").lower()
-
+    
     # --------------------------------------------------------
-    # PyPI
+    # MAVEN / GRADLE (Java)
     # --------------------------------------------------------
+    if ecosystem == "maven":
+        if not purl.startswith("pkg:maven/"):
+            return False
+            
+        purl_clean = purl.split("@")[0].split("?")[0]
+        parts = purl_clean.replace("pkg:maven/", "").split("/")
+        
+        if len(parts) < 2:
+            return False
+            
+        comp_group = normalize_name(parts[0])
+        comp_artifact = normalize_name("/".join(parts[1:]))
 
+        dep_group = normalize_name(dependency.get("group", ""))
+        dep_artifact = normalize_name(dependency.get("artifact", ""))
+
+        return (comp_group == dep_group) and (comp_artifact == dep_artifact)
+    
+    # --------------------------------------------------------
+    # PYPI (Python)
+    # --------------------------------------------------------
     if ecosystem == "pypi":
-        return purl.startswith("pkg:pypi/")
-
+        if not purl.startswith("pkg:pypi/"):
+            return False
+            
+        component_name = normalize_name(component.get("name"))
+        dependency_name = normalize_name(dependency.get("name"))
+        
+        return component_name == dependency_name
+    
     # --------------------------------------------------------
-    # Debian
+    # DEBIAN / ALTRI
     # --------------------------------------------------------
-
     if ecosystem == "deb":
-        return purl.startswith("pkg:deb/")
-
-    # --------------------------------------------------------
-    # Git
-    # --------------------------------------------------------
-
-    if ecosystem == "git":
-
-        if component.get("type") == "library":
-            return (dependency_name in component_name)
-
-        return False
-
-    # --------------------------------------------------------
-    # unknown
-    # --------------------------------------------------------
-
-    return (component_name == dependency_name)
-
+        if not purl.startswith("pkg:deb/"):
+            return False
+            
+        component_name = normalize_name(component.get("name"))
+        dependency_name = normalize_name(dependency.get("name"))
+        
+        return component_name == dependency_name
+    
+    return False
 
 def find_declared_components(source_dependencies, sbom_components):
-
+    print(f"[DEBUG SBOM TYPE] Tipo: {type(sbom_components)}, Elementi: {len(sbom_components)}", flush=True)
+    if isinstance(sbom_components, list) and len(sbom_components) > 0:
+        print(f"[DEBUG SBOM FIRST] Primo elemento: {sbom_components[0]}", flush=True)
     declared = {}
     matched_dependencies = []
 
@@ -697,6 +807,21 @@ def find_declared_components(source_dependencies, sbom_components):
         for dependency in source_dependencies:
 
             if component_matches_dependency(component, dependency):
+
+                # Maven: se il manifest fissa una versione e lo SBOM contiene un'altra
+                # versione dello stesso artefatto, quella non e' la versione dichiarata
+                # (es. jackson 2.13.5 portata da Spring Boot vs 2.18.1 dichiarata nel pom).
+                # Le dipendenze senza versione (gestita da BOM/parent) restano match per nome.
+                dep_version = dependency.get("version")
+                comp_version = component.get("version")
+
+                if (
+                    dependency.get("ecosystem") == "maven"
+                    and dep_version
+                    and comp_version
+                    and dep_version != comp_version
+                ):
+                    continue
 
                 declared[purl] = {
                     **component,
@@ -857,9 +982,10 @@ def find_indirect_components(sbom_components, dependency_map, declared_purls, tr
 # Analisi completa
 # ============================================================
 
+
 def analyze_source_components(STORAGE_DIR):
 
-    final_sbom_path = os.path.join(STORAGE_DIR, "final_merged_sbom.json")
+    final_sbom_path = os.path.join(STORAGE_DIR,"final_merged_sbom.json")
 
     sbom = load_json_file(final_sbom_path)
 
@@ -871,24 +997,244 @@ def analyze_source_components(STORAGE_DIR):
 
     # Carica le dichiarazioni dai file sorgente (requirements.txt, pyproject.toml, dependencies.json)
     source_dependencies = load_source_dependencies(STORAGE_DIR)
-
+    print(f"[DEBUG] Dependency sorgenti trovate: {len(source_dependencies)}", flush=True)
+    for d in source_dependencies[:5]:  # Stampa le prime 5
+        print(f"[DEBUG SORGENTE] {d}", flush=True)
+        
     # Carica i componenti e le dipendenze dallo SBOM finale
     sbom_components = get_sbom_components(sbom)
-
+    print(f"[DEBUG] Componenti nello SBOM: {len(sbom_components)}", flush=True)
+    
     # Carica la mappa delle dipendenze dallo SBOM finale
     dependency_map = get_sbom_dependency_map(sbom)
 
     # Trova i componenti dichiarati nei file sorgente che corrispondono ai componenti dello SBOM
-    declared_components, matched_dependencies = (find_declared_components(source_dependencies,sbom_components))
+    declared_components, matched_dependencies = find_declared_components(
+        source_dependencies,
+        sbom_components
+    )
+    print(f"[DEBUG] Componenti dichiarati mappati con successo: {len(declared_components)}", flush=True)
+    print("\n" + "="*60, flush=True)
+    print("🔍 DOUBLE CHECK: COMPONENTI DICHIARATI MAPPATI NELLO SBOM", flush=True)
+    print("="*60, flush=True)
 
+    for purl, comp_data in declared_components.items():
+        source_file = comp_data.get("source_file")
+        comp_name = comp_data.get("name", "N/A")
+
+    print("="*60 + "\n", flush=True)
     # Tutti i PURL dichiarati nei file sorgente
     declared_purls = set(declared_components.keys())
 
-    # Tutti i componenti raggiungibili dalle dipendenze dichiarate, anche a più livelli
+    # ============================================================
+    # CLASSIFICAZIONE DIPENDENZE DIRETTE E TRANSITIVE
+    # ============================================================
+
+    # Tutti i componenti raggiungibili dalle dipendenze dichiarate,
+    # anche a più livelli.
+    # I componenti dichiarati direttamente mantengono la classificazione declared.
+
     transitive_purls = find_transitive_components(declared_purls, dependency_map)
 
-    # Tutti i componenti indiretti, cioè quelli che derivano da componenti sconosciuti
-    indirect_purls = find_indirect_components(sbom_components,dependency_map, declared_purls, transitive_purls)
+    transitive_purls = set(transitive_purls) - declared_purls
+
+    # ============================================================
+    # COMPONENTI NON RAGGIUNGIBILI DALLE DIPENDENZE DICHIARATE
+    # ============================================================
+
+    # I componenti non raggiungibili dalle dipendenze dichiarate
+    # possono essere sconosciuti oppure transitive di sconosciute.
+
+    all_purls = set(sbom_components.keys())
+
+    reachable_purls = declared_purls | transitive_purls
+
+    remaining_purls = all_purls - reachable_purls
+
+    # ============================================================
+    # COSTRUISCE LE RELAZIONI IN INGRESSO
+    # ============================================================
+
+    # Per individuare le radici sconosciute, calcola i predecessori
+    # di ogni componente non raggiungibile dalle dipendenze dichiarate.
+
+    incoming = {}
+
+    for purl in remaining_purls:
+        incoming[purl] = set()
+
+    for parent_purl, child_purls in dependency_map.items():
+
+        if parent_purl not in remaining_purls:
+            continue
+
+        for child_purl in child_purls:
+
+            if child_purl not in remaining_purls:
+                continue
+
+            incoming[child_purl].add(parent_purl)
+
+    # ============================================================
+    # INDIVIDUA LE RADICI SCONOSCIUTE
+    # ============================================================
+
+    # I componenti non raggiungibili dalle dipendenze dichiarate
+    # e senza predecessori nel grafo residuo vengono considerati
+    # radici sconosciute.
+
+    unknown_roots = {
+        purl
+        for purl in remaining_purls
+        if not incoming[purl]
+    }
+
+    # ============================================================
+    # CLASSIFICAZIONE COMPONENTI
+    # ============================================================
+
+    classifications = {}
+
+    # Le dipendenze dichiarate direttamente
+    for purl in declared_purls:
+        classifications[purl] = "declared"
+
+    # Le dipendenze derivate da una dipendenza diretta
+    for purl in transitive_purls:
+        classifications[purl] = "transitive"
+
+    # Le radici sconosciute
+    for purl in unknown_roots:
+        classifications[purl] = "unknown"
+
+    # ============================================================
+    # RICERCA CATENE DI DIPENDENZA
+    # ============================================================
+
+    # Cerca il percorso di dipendenze da una radice fino al componente target.
+    # La ricerca viene effettuata con BFS per individuare un percorso
+    # semplice evitando cicli.
+
+    def find_chain_from_roots(target_purl, roots, allowed_purls):
+
+        queue = deque()
+
+        visited = set()
+
+        for root_purl in roots:
+
+            if root_purl not in allowed_purls:
+                continue
+
+            queue.append(
+                (root_purl, [root_purl])
+            )
+
+            visited.add(root_purl)
+
+        while queue:
+
+            current_purl, chain = queue.popleft()
+
+            if current_purl == target_purl:
+                return chain
+
+            for child_purl in dependency_map.get(current_purl, []):
+
+                if child_purl not in allowed_purls:
+                    continue
+
+                if child_purl in visited:
+                    continue
+
+                visited.add(child_purl)
+
+                queue.append(
+                    (
+                        child_purl,
+                        chain + [child_purl]
+                    )
+                )
+
+        return []
+
+    # ============================================================
+    # CLASSIFICA LE TRANSITIVE DI SCONOSCIUTE
+    # ============================================================
+
+    # Partendo dalle radici sconosciute, visita ricorsivamente
+    # tutti i componenti discendenti.
+    # Questi componenti vengono classificati come transitive_unknown.
+
+    queue = deque()
+
+    transitive_unknown_purls = set()
+
+    # Salva le catene di dipendenza dalle radici sconosciute
+    unknown_chains = {}
+
+    for root_purl in unknown_roots:
+
+        unknown_chains[root_purl] = [root_purl]
+
+        queue.append(root_purl)
+
+    while queue:
+
+        current_purl = queue.popleft()
+
+        current_chain = unknown_chains[current_purl]
+
+        for child_purl in dependency_map.get(
+            current_purl,
+            []
+        ):
+
+            # Considera solamente i componenti non raggiungibili
+            # dalle dipendenze dichiarate
+            if child_purl not in remaining_purls:
+                continue
+
+            # Evita di sovrascrivere le radici sconosciute
+            if child_purl in unknown_roots:
+                continue
+
+            # Evita di sovrascrivere componenti già raggiunti
+            # da un percorso sconosciuto
+            if child_purl in transitive_unknown_purls:
+                continue
+
+            transitive_unknown_purls.add(child_purl)
+
+            classifications[child_purl] = "transitive_unknown"
+
+            unknown_chains[child_purl] = (
+                current_chain + [child_purl]
+            )
+
+            queue.append(child_purl)
+
+    # ============================================================
+    # GESTIONE COMPONENTI RESIDUI E CICLI
+    # ============================================================
+
+    # Gli eventuali componenti rimasti non raggiungibili da alcuna
+    # radice identificabile, ad esempio cicli isolati, vengono
+    # classificati come sconosciuti.
+
+    unresolved_purls = (
+        remaining_purls
+        - unknown_roots
+        - transitive_unknown_purls
+    )
+
+    for purl in unresolved_purls:
+        classifications[purl] = "unknown"
+
+    # ============================================================
+    # COSTRUISCE I COMPONENTI NON DICHIARATI
+    # ============================================================
+
     not_declared = []
 
     for purl, component in sbom_components.items():
@@ -896,46 +1242,72 @@ def analyze_source_components(STORAGE_DIR):
         if purl in declared_purls:
             continue
 
-        if purl in transitive_purls:
+        classification = classifications.get(
+            purl,
+            "unknown"
+        )
 
-            classification = "transitive"
+        # ========================================================
+        # DIPENDENZE TRANSITIVE
+        # ========================================================
+
+        if classification == "transitive":
 
             # Trova la catena di dipendenza fino a una dipendenza dichiarata
-            chain = find_dependency_chain_to_declared(purl, dependency_map, declared_purls)
+            chain = find_chain_from_roots(
+                purl,
+                declared_purls,
+                reachable_purls
+            )
+
+            if chain:
+                origin_purl = chain[0]
+                origin_component = sbom_components.get(
+                    origin_purl,
+                    {}
+                )
+            else:
+                origin_component = {}
+                chain = []
+
+        # ========================================================
+        # TRANSITIVE DI SCONOSCIUTE
+        # ========================================================
+
+        elif classification == "transitive_unknown":
+
+            # Recupera la catena che parte dalla radice sconosciuta
+            chain = unknown_chains.get(
+                purl,
+                []
+            )
 
             if chain:
                 origin_purl = chain[0]
 
-                origin_component = sbom_components.get(origin_purl, {})
+                origin_component = sbom_components.get(
+                    origin_purl,
+                    {}
+                )
             else:
                 origin_component = {}
-
-        elif purl in indirect_purls:
-
-            chain = indirect_purls[purl]
-
-            # Sicurezza aggiuntiva:
-            # se la catena contiene solo la componente stessa è unknown
-            if len(chain) <= 1 or chain[0] == chain[-1]:
-
-                classification = "unknown"
                 chain = []
-                origin_component = {}
 
-            else:
-
-                classification = "indirect"
-
-                origin_purl = chain[0]
-
-            origin_component = sbom_components.get(origin_purl,{})
+        # ========================================================
+        # COMPONENTI SCONOSCIUTI
+        # ========================================================
 
         else:
 
             classification = "unknown"
 
             chain = []
+
             origin_component = {}
+
+        # ========================================================
+        # AGGIUNGE IL COMPONENTE AL RISULTATO
+        # ========================================================
 
         not_declared.append({
             "name": component.get(
@@ -948,7 +1320,8 @@ def analyze_source_components(STORAGE_DIR):
             ),
             "purl": purl,
             "classification": classification,
-            "derived_from": (origin_component.get("name")
+            "derived_from": (
+                origin_component.get("name")
                 if origin_component
                 else None
             ),
@@ -963,6 +1336,34 @@ def analyze_source_components(STORAGE_DIR):
                 for chain_purl in chain
             ] if chain else [],
         })
+
+    # ============================================================
+    # CALCOLO STATISTICHE
+    # ============================================================
+
+    # Calcola il numero di componenti per ogni classificazione
+
+    transitive_count = sum(
+        1
+        for item in not_declared
+        if item["classification"] == "transitive"
+    )
+
+    transitive_unknown_count = sum(
+        1
+        for item in not_declared
+        if item["classification"] == "transitive_unknown"
+    )
+
+    unknown_count = sum(
+        1
+        for item in not_declared
+        if item["classification"] == "unknown"
+    )
+
+    # ============================================================
+    # RISULTATO
+    # ============================================================
 
     return {
         "status": "success",
@@ -988,25 +1389,10 @@ def analyze_source_components(STORAGE_DIR):
                 not_declared
             ),
 
-            "transitive": sum(
-                1
-                for item in not_declared
-                if item["classification"]
-                == "transitive"
-            ),
+            "transitive": transitive_count,
 
-            "indirect": sum(
-                1
-                for item in not_declared
-                if item["classification"]
-                == "indirect"
-            ),
+            "transitive_unknown": transitive_unknown_count,
 
-            "unknown": sum(
-                1
-                for item in not_declared
-                if item["classification"]
-                == "unknown"
-            )-16
+            "unknown": unknown_count
         }
     }

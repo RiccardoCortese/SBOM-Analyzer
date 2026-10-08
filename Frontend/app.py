@@ -15,6 +15,8 @@ from components.search_component import render_search_component
 from components.scan_vulnerability import render_scan_vulnerability
 from components.component_provenance import render_component_provenance
 from components.component_not_declared_vuln import render_component_not_declared_vuln
+from components.additional_components import render_additional_components
+from components.characterization_analysis import render_characterization_analysis
 # ============================================================
 # CONFIGURAZIONE APP STREAMLIT
 # ============================================================
@@ -83,6 +85,12 @@ render_scan_vulnerability(BACKEND_URL)
 
 # Sezione Componenti non dichiarati con vulnerabilità
 render_component_not_declared_vuln(BACKEND_URL)
+
+# Sezione Componenti Aggiuntivi RQ1
+render_additional_components(BACKEND_URL)
+
+# Sezione Analisi della Caratterizzazione dei Componenti RQ2
+render_characterization_analysis(BACKEND_URL)
 
 # Sezione Ricerca Componenti specifici e Visualizzazione Grafi
 render_search_component(BACKEND_URL)

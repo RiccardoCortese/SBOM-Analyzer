@@ -292,7 +292,7 @@ def extract_base_images(dockerfile_content):
     return images
 
 def get_docker_analysis(dockerfile_content, build_context):
-
+    
     # Analisi Dockerfile
     analyzer = DockerStepAnalyzer(dockerfile_content)
 
@@ -305,11 +305,9 @@ def get_docker_analysis(dockerfile_content, build_context):
 
     # Estrazione immagini base
     images = extract_base_images(dockerfile_content)
-
+    
     # Builder immagini intermedie
-    builder = DockerStepBuilder(
-        build_context=build_context
-    )
+    builder = DockerStepBuilder(build_context=build_context)
 
     filesystem_extractor = DockerFilesystemExtractor()
 
@@ -319,27 +317,16 @@ def get_docker_analysis(dockerfile_content, build_context):
 
     all_yara_results = []
 
-    os.makedirs(
-        os.path.join(
-            STORAGE_DIR,
-            "docker_sbom_steps"
-        ),
-        exist_ok=True
-    )
+    os.makedirs(os.path.join(STORAGE_DIR, "docker_sbom_steps"), exist_ok=True)
 
-    image_analyzer = DockerImageAnalyzer(
-        output_dir=os.path.join(
-            STORAGE_DIR,
-            "docker_sbom_steps"
-        )
-    )
+    image_analyzer = DockerImageAnalyzer(output_dir=os.path.join(STORAGE_DIR, "docker_sbom_steps"))
 
     try:
 
         sbom_paths = []
         previous_filesystem = None
         filesystem_path = None
-        steps = steps[:4]
+        #steps = steps[:4]
         for step in steps:
 
             # Costruzione immagine dello step
@@ -438,13 +425,9 @@ def get_docker_analysis(dockerfile_content, build_context):
 
             step.sbom_path = sbom_path
 
-            sbom_paths.append(
-                sbom_path
-            )
+            sbom_paths.append(sbom_path)
 
-            sbom = image_analyzer.load_sbom(
-                sbom_path
-            )
+            sbom = image_analyzer.load_sbom(sbom_path)
 
             unique_components = {
                 comp.get("purl")
@@ -452,18 +435,17 @@ def get_docker_analysis(dockerfile_content, build_context):
                 if comp.get("purl")
             }
 
-            step.total_components = len(
-                unique_components
-            )
+            step.total_components = len(unique_components)
 
             print( f"Step {step.index}:", step.total_components, "componenti unici" )
 
+        
         # ==========================
         # SBOM DIFF
         # ==========================
 
         diffs = []
-        removed_components = []
+        removed_components = {}
 
         for i in range(1, len(sbom_paths)):
 
@@ -479,8 +461,25 @@ def get_docker_analysis(dockerfile_content, build_context):
                     "diff": diff
                 }
             )
-            
-            removed_components = diff.get("removed", [])
+
+            # Accumula le librerie rimosse
+            for comp in diff.get("removed", []):
+                purl = comp.get("purl")
+
+                if purl:
+                    removed_components[purl] = comp
+
+            # Rimuove dal registro le librerie reintrodotte
+            for comp in diff.get("added", []):
+                purl = comp.get("purl")
+
+                if purl:
+                    removed_components.pop(purl, None)
+
+        # Converte il dizionario in una lista
+        removed_components = list(removed_components.values())
+
+
 
     finally:
         if filesystem_path:

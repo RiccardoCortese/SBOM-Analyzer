@@ -8,11 +8,21 @@ def render_merge_sboms(backend_url: str):
     col1, col2 = st.columns([1, 1])
 
     with col1:
-        st.info("Clicca qui per unire gli artefatti")
+        st.info("Configura e avvia l'unione degli artefatti")
+
+        include_removed = st.checkbox(
+            "Includi le dipendenze rimosse",
+            value=False,
+            help="Se selezionata, mantiene nello SBOM anche le dipendenze che sono state rimosse nella scansione del Dockerfile."
+        )
+
         if st.button("Unisci Artefatti SBOM", use_container_width=True):
             with st.spinner("Unione artefatti in corso..."):
                 try:
-                    res_merge = requests.get(f"{backend_url}/merge-artifacts")
+                    res_merge = requests.get(f"{backend_url}/merge-artifacts",
+                        params={"include_removed": include_removed}
+                    )
+
                     if res_merge.status_code == 200:
                         merge_data = res_merge.json()
                         st.session_state.merged_results = merge_data
@@ -43,11 +53,17 @@ def render_merge_sboms(backend_url: str):
 
     if st.session_state.merged_results is not None:
         st.subheader("📦 Risultati Unione Artefatti SBOM")
+
         st.download_button(
             label="Scarica SBOM Unificato",
-            data=json.dumps(st.session_state.merged_results["data"]),
+            data=json.dumps(
+                st.session_state.merged_results["data"],
+                indent=2,
+                ensure_ascii=False
+            ),
             file_name="final_merged_sbom.json",
             mime="application/json"
         )
+
         with st.container(height=300):
             st.json(st.session_state.merged_results["data"])

@@ -35,7 +35,7 @@ class DockerStepBuilder:
     def normalize_line_endings(self, path):
         for root, _, files in os.walk(path):
             for file in files:
-                if file.endswith((".py", ".sh", ".bash")):
+                if file.endswith((".py", ".sh", ".bash")) or file == "gradlew":
                     file_path = os.path.join(root, file)
 
                     try:
@@ -49,6 +49,9 @@ class DockerStepBuilder:
 
                         with open(file_path, "wb") as f:
                             f.write(content)
+
+                        if file == "gradlew":
+                            os.chmod(file_path, 0o755)
 
                     except Exception:
                         pass

@@ -89,6 +89,5 @@ def render_config_target(backend_url: str):
                     # Se il backend fallisce, mostriamo l'errore specifico
                     error_msg = res.json().get("detail", "Errore sconosciuto")
                     st.error(f"Discovery Fallita: {error_msg}")
-                    st.warning("Suggerimento: Verifica che il percorso del Dockerfile sia corretto o passa alla modalità Manuale.")
             except Exception as e:
                 st.error(f"Errore di connessione: {str(e)}")
