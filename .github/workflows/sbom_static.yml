@@ -82,26 +82,35 @@ jobs:
         java-version: '17'
         cache: maven
  
-    # Evita il 429 di Maven Central: popola ~/.m2 passando da un mirror
-    - name: Popola cache Maven (solo progetti Maven)
+    - name: Popola cache Maven
       if: ${{ (env.FORMAT_TYPE == 'tutto' || env.FORMAT_TYPE == 'all' || env.FORMAT_TYPE == 'entrambi') && hashFiles('repo_esterna/**/pom.xml') != '' }}
       run: |
         mkdir -p ~/.m2
+
         cat > ~/.m2/settings.xml <<'EOF'
         <settings>
           <mirrors>
             <mirror>
               <id>google-central</id>
-              <name>Maven Central (mirror Google)</name>
+              <name>Maven Central Mirror</name>
               <url>https://maven-central.storage-download.googleapis.com/maven2/</url>
               <mirrorOf>central</mirrorOf>
             </mirror>
           </mirrors>
         </settings>
         EOF
- 
+
         cd repo_esterna
-        mvn -B -q -fae -DskipTests dependency:resolve || echo "Risoluzione Maven parziale, procedo con la scansione."
+
+        echo "=== RISOLUZIONE DIPENDENZE MAVEN ==="
+
+        mvn -B \
+          -DskipTests \
+          -DexcludeTransitive=false \
+          dependency:resolve
+
+        echo "=== CACHE MAVEN ==="
+        du -sh ~/.m2/repository || true
  
     - name: Baseline SBOM - Trivy filesystem
       if: ${{ env.FORMAT_TYPE == 'tutto' || env.FORMAT_TYPE == 'all' || env.FORMAT_TYPE == 'entrambi' }}
@@ -339,30 +348,34 @@ jobs:
             | head -n 1)
         fi
 
-        if [ -n "$POM_PATH" ] && [ -f "$POM_PATH" ]; then
-          echo "pom.xml trovato: $POM_PATH"
-
-          DIR_PATH=$(dirname "$POM_PATH")
-
-          echo "=== JAVA ==="
-          java -version
-
-          echo "=== MAVEN ==="
-          mvn --version || true
-
-          echo "=== TRIVY MAVEN SBOM ==="
-
-          trivy fs \
-            --format cyclonedx \
-            --output "${{ github.workspace }}/${{ env.OUTPUT_DIR }}/trivy_maven.json" \
-            "$DIR_PATH"
-
-          echo "=== SBOM GENERATO ==="
-          ls -lh "${{ github.workspace }}/${{ env.OUTPUT_DIR }}/trivy_maven.json"
-
-        else
+        if [ -z "$POM_PATH" ] || [ ! -f "$POM_PATH" ]; then
           echo "Skipping Maven: pom.xml non trovato."
+          exit 0
         fi
+
+        echo "pom.xml trovato: $POM_PATH"
+
+        DIR_PATH=$(dirname "$POM_PATH")
+
+        echo "=== JAVA ==="
+        java -version
+
+        echo "=== MAVEN ==="
+        mvn --version
+
+        echo "=== CACHE MAVEN ==="
+        du -sh ~/.m2/repository || true
+
+        echo "=== TRIVY MAVEN SBOM ==="
+
+        trivy fs \
+          --offline-scan \
+          --format cyclonedx \
+          --output "${{ github.workspace }}/${{ env.OUTPUT_DIR }}/trivy_maven.json" \
+          "$DIR_PATH"
+
+        echo "=== SBOM GENERATO ==="
+        ls -lh "${{ github.workspace }}/${{ env.OUTPUT_DIR }}/trivy_maven.json"
 
     # ============================================================
     # ESECUZIONE GRADLE - CYCLONEDX
