@@ -333,51 +333,33 @@ jobs:
         POM_PATH="repo_esterna/pom.xml"
 
         if [ ! -f "$POM_PATH" ]; then
-          POM_PATH=$(find "$(pwd)/repo_esterna" -name "pom.xml" -not -path "*/target/*" | head -n 1)
+          POM_PATH=$(find "$(pwd)/repo_esterna" \
+            -name "pom.xml" \
+            -not -path "*/target/*" \
+            | head -n 1)
         fi
 
         if [ -n "$POM_PATH" ] && [ -f "$POM_PATH" ]; then
           echo "pom.xml trovato: $POM_PATH"
+
           DIR_PATH=$(dirname "$POM_PATH")
 
-          # ============================================================
-          # DIAGNOSTICA MAVEN
-          # ============================================================
           echo "=== JAVA ==="
           java -version
 
-          echo "=== MAVEN LOCATION ==="
-          which mvn
-
-          echo "=== MAVEN VERSION ==="
+          echo "=== MAVEN ==="
           mvn --version || true
 
-          echo "=== MAVEN HOME ==="
-          echo "${MAVEN_HOME:-<non impostato>}"
+          echo "=== TRIVY MAVEN SBOM ==="
 
-          echo "=== POM ==="
-          echo "$POM_PATH"
+          trivy fs \
+            --format cyclonedx \
+            --output "${{ github.workspace }}/${{ env.OUTPUT_DIR }}/trivy_maven.json" \
+            "$DIR_PATH"
 
-          echo "=== AWS JAVA SDK CORE NEL POM ==="
-          grep -n -B 5 -A 8 "aws-java-sdk-core" "$POM_PATH" || true
+          echo "=== SBOM GENERATO ==="
+          ls -lh "${{ github.workspace }}/${{ env.OUTPUT_DIR }}/trivy_maven.json"
 
-          echo "=== ESECUZIONE CYCLONEDX ==="
-
-          cd "$DIR_PATH"
-
-          # Generazione nativa tramite il plugin CycloneDX Maven
-          mvn org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom -Dcyclonedx.skip=false
-
-          # Individua il file generato
-          if [ -f "target/bom.json" ]; then
-            cp target/bom.json "${{ github.workspace }}/${{ env.OUTPUT_DIR }}/trivy_maven.json"
-          elif [ -f "target/cyclonedx/bom.json" ]; then
-            cp target/cyclonedx/bom.json "${{ github.workspace }}/${{ env.OUTPUT_DIR }}/trivy_maven.json"
-          else
-            find target -name "bom.json" -exec cp {} "${{ github.workspace }}/${{ env.OUTPUT_DIR }}/trivy_maven.json" \;
-          fi
-
-          cd -
         else
           echo "Skipping Maven: pom.xml non trovato."
         fi
@@ -454,69 +436,42 @@ jobs:
 
     - name: Process Gradle SBOMs
       if: ${{ env.FORMAT_TYPE == 'gradle' || env.FORMAT_TYPE == 'entrambi' }}
-      env:
-        PROJECT_DIR: ${{ steps.detect-gradle-java.outputs.project_dir }}
-        CDX_VERSION: ${{ steps.detect-gradle-java.outputs.cyclonedx_version }}
       run: |
         OUT_DIR="${{ github.workspace }}/${{ env.OUTPUT_DIR }}"
         mkdir -p "$OUT_DIR"
+
+        ROOT="$(pwd)/repo_esterna"
+
+        PROJECT_DIR=""
+
+        F=$(find "$ROOT" \
+          \( -name "settings.gradle" \
+            -o -name "settings.gradle.kts" \
+            -o -name "build.gradle" \
+            -o -name "build.gradle.kts" \) \
+          -not -path "*/build/*" \
+          | head -n 1)
+
+        if [ -n "$F" ]; then
+          PROJECT_DIR=$(dirname "$F")
+        fi
 
         if [ -z "$PROJECT_DIR" ] || [ ! -d "$PROJECT_DIR" ]; then
           echo "Skipping Gradle: nessun progetto Gradle trovato."
           exit 0
         fi
 
-        cd "$PROJECT_DIR"
+        echo "Progetto Gradle trovato: $PROJECT_DIR"
 
-        if [ -f ./gradlew ]; then
-          chmod +x ./gradlew; GRADLE_CMD="./gradlew"
-        elif command -v gradle >/dev/null 2>&1; then
-          GRADLE_CMD="gradle"
-        else
-          echo "Gradle non disponibile, uso Trivy come fallback."
-          trivy fs --format cyclonedx --output "$OUT_DIR/trivy_gradle.json" .
-          exit 0
-        fi
+        echo "=== TRIVY GRADLE SBOM ==="
 
-        # Init script: heredoc senza apici per espandere ${CDX_VERSION}
-        cat > /tmp/init-cyclonedx.gradle <<EOF
-        initscript {
-            repositories {
-                mavenCentral()
-                gradlePluginPortal()
-            }
-            dependencies {
-                classpath 'org.cyclonedx:cyclonedx-gradle-plugin:${CDX_VERSION}'
-            }
-        }
-        allprojects {
-            apply plugin: org.cyclonedx.gradle.CycloneDxPlugin
-        }
-        EOF
+        trivy fs \
+          --format cyclonedx \
+          --output "$OUT_DIR/trivy_gradle.json" \
+          "$PROJECT_DIR"
 
-        OK=true
-        "$GRADLE_CMD" cyclonedxBom --init-script /tmp/init-cyclonedx.gradle \
-          --no-daemon --continue || OK=false
-
-        # Raccolta BOM: plugin 1.x -> build/reports/bom.json, 2.x/3.x -> build/reports/cyclonedx/bom.json
-        BOMS=$(find . -type f -name "bom.json" -path "*/build/reports/*" | awk '{print length, $0}' | sort -n | cut -d' ' -f2-)
-
-        if [ -n "$BOMS" ]; then
-          ROOT_BOM=$(echo "$BOMS" | head -n 1)
-          cp "$ROOT_BOM" "$OUT_DIR/trivy_gradle.json"
-          echo "SBOM principale: $ROOT_BOM"
-
-          # Eventuali sotto-moduli, salvati con nome distinto
-          i=1
-          echo "$BOMS" | tail -n +2 | while read -r B; do
-            cp "$B" "$OUT_DIR/trivy_gradle_module_${i}.json"; i=$((i+1))
-          done
-        else
-          echo "Generazione nativa fallita (OK=$OK), fallback su Trivy."
-          trivy fs --format cyclonedx --output "$OUT_DIR/trivy_gradle.json" .
-        fi
-
-        ls -lh "$OUT_DIR"
+        echo "=== SBOM GENERATO ==="
+        ls -lh "$OUT_DIR/trivy_gradle.json"
 
     - name: Checkout repository del tool (script di confronto)
       if: ${{ !cancelled() && env.FORMAT_TYPE == 'entrambi' }}
