@@ -82,36 +82,6 @@ jobs:
         java-version: '17'
         cache: maven
  
-    - name: Popola cache Maven
-      if: ${{ (env.FORMAT_TYPE == 'tutto' || env.FORMAT_TYPE == 'all' || env.FORMAT_TYPE == 'entrambi') && hashFiles('repo_esterna/**/pom.xml') != '' }}
-      run: |
-        mkdir -p ~/.m2
-
-        cat > ~/.m2/settings.xml <<'EOF'
-        <settings>
-          <mirrors>
-            <mirror>
-              <id>google-central</id>
-              <name>Maven Central Mirror</name>
-              <url>https://maven-central.storage-download.googleapis.com/maven2/</url>
-              <mirrorOf>central</mirrorOf>
-            </mirror>
-          </mirrors>
-        </settings>
-        EOF
-
-        cd repo_esterna
-
-        echo "=== RISOLUZIONE DIPENDENZE MAVEN ==="
-
-        mvn -B \
-          -DskipTests \
-          -DexcludeTransitive=false \
-          dependency:resolve
-
-        echo "=== CACHE MAVEN ==="
-        du -sh ~/.m2/repository || true
- 
     - name: Baseline SBOM - Trivy filesystem
       if: ${{ env.FORMAT_TYPE == 'tutto' || env.FORMAT_TYPE == 'all' || env.FORMAT_TYPE == 'entrambi' }}
       run: |
@@ -119,7 +89,7 @@ jobs:
         export OUT="${{ github.workspace }}/${{ env.OUTPUT_DIR }}/trivy_fs_all.json"
  
         cd repo_esterna
-        trivy fs --offline-scan --timeout 30m --format cyclonedx --output "$OUT" .
+        trivy fs --timeout 30m --format cyclonedx --output "$OUT" .
  
         echo "=== Componenti nella baseline, per tipo ==="
         python3 - <<'EOF'
