@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       image_repository:
-        description: 'Container Image Repository'
-        required: true
+        description: 'Immagine pubblicata da usare per prima (vuoto = non usarne)'
+        required: false
         default: ''
       src_vuln_type:
         description: Vulnerability types (os,library). Default os,library.
@@ -16,28 +16,112 @@ on:
           - 'library'
           - 'os,library'
         default: 'os,library'
+      force_build:
+        description: 'true = costruisci sempre dal Dockerfile, ignorando image_repository'
+        required: false
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+        default: 'false'
+      src_repository:
+        description: 'Repository sorgente (owner/repo) per la build dal Dockerfile. Vuoto = nessuna build'
+        required: false
+        default: ''
+      src_branch:
+        description: 'Branch del repository sorgente'
+        required: false
+        default: 'main'
+      dockerfile_path:
+        description: 'Percorso del Dockerfile nel repository'
+        required: false
+        default: 'Dockerfile'
+      build_context:
+        description: 'Contesto di build, relativo alla radice del repository'
+        required: false
+        default: '.'
+
 env:
   OUTPUT_NAME: 'cyclonedxSBOM'
+  LOCAL_IMAGE: 'sbom-analyzer/target:ci'
+
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read 
-      security-events: write 
-      actions: read 
-    
+      contents: read
+
     steps:
 
+      # ---------- 1) Immagine pubblicata: la si usa per prima se esiste ----------
+      - name: Verifica immagine pubblicata
+        id: pub
+        if: ${{ inputs.image_repository != '' && inputs.force_build != 'true' }}
+        continue-on-error: true
+        env:
+          IMAGE: ${{ inputs.image_repository }}
+        run: |
+          if docker manifest inspect "$IMAGE" > /dev/null 2>&1; then
+            echo "Immagine pubblicata raggiungibile: $IMAGE"
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Immagine pubblicata non raggiungibile: $IMAGE"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ---------- 2) Build dal Dockerfile: solo se serve ----------
+      - name: Checkout repository sorgente
+        if: ${{ inputs.src_repository != '' && steps.pub.outputs.available != 'true' }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.src_repository }}
+          ref: ${{ inputs.src_branch }}
+          path: repo_esterna
+
+      # continue-on-error: se la build fallisce lo step di selezione segnala l'errore.
+      # I valori degli input passano da variabili d'ambiente (non dentro lo script).
+      - name: Build immagine dal Dockerfile
+        id: build
+        if: ${{ inputs.src_repository != '' && steps.pub.outputs.available != 'true' }}
+        continue-on-error: true
+        timeout-minutes: 45
+        env:
+          DOCKERFILE_PATH: ${{ inputs.dockerfile_path }}
+          BUILD_CONTEXT: ${{ inputs.build_context }}
+        run: |
+          cd repo_esterna
+          docker build -f "$DOCKERFILE_PATH" -t "$LOCAL_IMAGE" "$BUILD_CONTEXT"
+          echo "built=true" >> "$GITHUB_OUTPUT"
+
+      # ---------- 3) Scelta dell'immagine da analizzare ----------
+      - name: Seleziona immagine da analizzare
+        id: image
+        env:
+          PUB_AVAILABLE: ${{ steps.pub.outputs.available }}
+          BUILT: ${{ steps.build.outputs.built }}
+          PUBLISHED_IMAGE: ${{ inputs.image_repository }}
+        run: |
+          if [ "$PUB_AVAILABLE" = "true" ]; then
+            echo "Uso l'immagine pubblicata: $PUBLISHED_IMAGE"
+            echo "ref=$PUBLISHED_IMAGE" >> "$GITHUB_OUTPUT"
+          elif [ "$BUILT" = "true" ]; then
+            echo "Uso l'immagine costruita dal Dockerfile: $LOCAL_IMAGE"
+            echo "ref=$LOCAL_IMAGE" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Nessuna immagine da analizzare: immagine pubblicata assente o non raggiungibile e build dal Dockerfile non eseguita o fallita."
+            exit 1
+          fi
+
+      # ---------- 4) Scansioni (invariate, cambia solo image-ref) ----------
       - name: Generate SBOM
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ${{ inputs.image_repository }}
+          image-ref: ${{ steps.image.outputs.ref }}
           format: 'cyclonedx'
           output: 'cyclonedx-SBOM.json'
-          #severity: 'CRITICAL,HIGH'
           exit-code: '0'
           vuln-type: ${{ inputs.src_vuln_type }}
-      
+
       - name: Run Trivy for vulnerability scanner
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -48,9 +132,8 @@ jobs:
           exit-code: '0'
           vuln-type: ${{ inputs.src_vuln_type }}
           scanners: 'vuln'
-          # On a subsequent call to the action we know trivy is already installed so can skip this
           skip-setup-trivy: true
-          
+
       - name: Run Trivy for license scanner
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -61,11 +144,10 @@ jobs:
           exit-code: '0'
           vuln-type: ${{ inputs.src_vuln_type }}
           scanners: 'license'
-          # On a subsequent call to the action we know trivy is already installed so can skip this
           skip-setup-trivy: true
-          
+
       - name: Upload Trivy results
         uses: actions/upload-artifact@v7
         with:
-           name: ${{ env.OUTPUT_NAME }}
-           path: ${{github.workspace}}/*.json     
+          name: ${{ env.OUTPUT_NAME }}
+          path: ${{ github.workspace }}/*.json
