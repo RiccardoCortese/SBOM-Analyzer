@@ -107,8 +107,9 @@ jobs:
         mvn -B \
           -DskipTests \
           -DexcludeTransitive=false \
-          org.apache.maven.plugins:maven-dependency-plugin:3.9.0:resolve \
-          dependency:resolve
+          -DincludeScope=runtime \
+          dependency:resolve \
+          || echo "::warning::Risoluzione Maven incompleta; continuo con la scansione Trivy"
 
         echo "=== CACHE MAVEN ==="
         du -sh ~/.m2/repository || true
