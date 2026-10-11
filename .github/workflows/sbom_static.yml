@@ -107,7 +107,7 @@ jobs:
         mvn -B \
           -DskipTests \
           -DexcludeTransitive=false \
-          -DincludeScope=runtime \
+          org.apache.maven.plugins:maven-dependency-plugin:3.9.0:resolve \
           dependency:resolve
 
         echo "=== CACHE MAVEN ==="
