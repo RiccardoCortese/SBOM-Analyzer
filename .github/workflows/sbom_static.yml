@@ -107,7 +107,7 @@ jobs:
         mvn -B \
           -DskipTests \
           -DexcludeTransitive=false \
-          -DincludeScope=runtime
+          -DincludeScope=runtime \
           dependency:resolve
 
         echo "=== CACHE MAVEN ==="
