@@ -82,37 +82,6 @@ jobs:
         java-version: '17'
         cache: maven
  
-    - name: Popola cache Maven
-      if: ${{ (env.FORMAT_TYPE == 'tutto' || env.FORMAT_TYPE == 'all' || env.FORMAT_TYPE == 'entrambi') && hashFiles('repo_esterna/**/pom.xml') != '' }}
-      run: |
-        mkdir -p ~/.m2
-
-        cat > ~/.m2/settings.xml <<'EOF'
-        <settings>
-          <mirrors>
-            <mirror>
-              <id>google-central</id>
-              <name>Maven Central Mirror</name>
-              <url>https://maven-central.storage-download.googleapis.com/maven2/</url>
-              <mirrorOf>central</mirrorOf>
-            </mirror>
-          </mirrors>
-        </settings>
-        EOF
-
-        cd repo_esterna
-
-        echo "=== RISOLUZIONE DIPENDENZE MAVEN ==="
-
-        mvn -B \
-          -DskipTests \
-          -DexcludeTransitive=false \
-          -DincludeScope=runtime \
-          dependency:resolve \
-          || echo "::warning::Risoluzione Maven incompleta; continuo con la scansione Trivy"
-
-        echo "=== CACHE MAVEN ==="
-        du -sh ~/.m2/repository || true
  
     - name: Baseline SBOM - Trivy filesystem
       if: ${{ env.FORMAT_TYPE == 'tutto' || env.FORMAT_TYPE == 'all' || env.FORMAT_TYPE == 'entrambi' }}
