@@ -488,28 +488,7 @@ jobs:
         echo "=== SBOM GENERATO ==="
         ls -lh "$OUT_DIR/trivy_gradle.json"
 
-    - name: Checkout repository del tool (script di confronto)
-      if: ${{ !cancelled() && env.FORMAT_TYPE == 'entrambi' }}
-      uses: actions/checkout@v4
-      with:
-        path: tool_repo
  
-    - name: Confronto intero repository vs scansioni per manifest
-      if: ${{ !cancelled() && env.FORMAT_TYPE == 'entrambi' }}
-      run: |
-        mkdir -p comparison_output
-        python3 tool_repo/scripts/compare_scans.py \
-          --fs "${{ env.OUTPUT_DIR }}/trivy_fs_all.json" \
-          --manifests-dir "${{ env.OUTPUT_DIR }}" \
-          --out-dir comparison_output
- 
-    # Nome senza "sbom"/"results"/"trivy": il backend non lo scambia per gli SBOM
-    - name: Upload report di confronto
-      if: ${{ !cancelled() && env.FORMAT_TYPE == 'entrambi' }}
-      uses: actions/upload-artifact@v4
-      with:
-        name: scan-comparison
-        path: comparison_output/*
     # ============================================================
     # CARICAMENTO RISULTATI COMPLETI
     # ============================================================
