@@ -82,7 +82,7 @@ def wait_and_download_artifacts(run_id: int, dest_dir: str):
     url_run = f"{GITHUB_API}/{MY_GITHUB_OWNER}/{MY_GITHUB_REPO}/actions/runs/{run_id}"
     
     # Polling sullo stato della run (Timeout massimo 10 minuti)
-    for _ in range(120):  
+    for _ in range(600):  
         print(f"Controllo stato run ID {run_id}...")
         res = requests.get(url_run, headers=headers)
         if res.status_code == 200:

@@ -20,10 +20,13 @@ class DockerImageAnalyzer:
             "image",
             "--format",
             "cyclonedx",
+            "--pkg-types",
+            "library",
             "--output",
             sbom_path,
             image_tag
         ]
+        
 
         result = subprocess.run(
             command,

@@ -2,6 +2,9 @@ import os
 import json
 import re
 import shutil
+import requests
+from urllib.parse import quote
+from packageurl import PackageURL
 from dockerfile_parse import DockerfileParser
 from docker_analysis.docker_step_analyzer import DockerStepAnalyzer
 from docker_analysis.docker_step_builder import DockerStepBuilder
@@ -181,53 +184,55 @@ def get_all_dependecies(content):
 # CREAZIONE DI UN ALBERO/GRAFO PER IL DOCKER CHE E' FLAT -> UNIFICA TUTTE LE DIPENDENZE IN UN'UNICA STRUTTURA GERARCHICA
 # ============================================================
 def build_universal_hierarchy(name_sbom_file_docker: str, folder_path: str):
-    
     all_dependencies_data = {}
-    
-    # Raccolta dei file
-    #search_paths = [os.path.join(folder_path, d) for d in ["manifests", "dependencies"] 
-    #                if os.path.exists(os.path.join(folder_path, d))]
-    
-    # Analizziamo tutti i file JSON trovati nelle cartelle specificate
-    #for path in search_paths:
-    for file_name in os.listdir(folder_path):
-        if file_name == "final_merged_sbom.json":
-            file_path = os.path.join(folder_path, file_name)
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    all_dependencies_data[file_name] = get_all_dependecies(f.read())
-            except Exception as e:
-                print(f"[ERROR] Impossibile elaborare {file_name}: {e}")
-                    
 
-    # Conversione in un'unica mappa di dipendenze per facilitare la costruzione della gerarchia totale
+    merged_path = os.path.join(folder_path, "final_merged_sbom.json")
+
+    if os.path.exists(merged_path):
+        try:
+            with open(merged_path, "r", encoding="utf-8") as f:
+                all_dependencies_data["final_merged_sbom.json"] = (
+                    get_all_dependecies(f.read())
+                )
+        except Exception as e:
+            print(f"[ERROR] Impossibile elaborare final_merged_sbom.json: {e}")
+
+    sbom_path = os.path.join(STORAGE_DIR, name_sbom_file_docker)
+
+    with open(sbom_path, "r", encoding="utf-8") as f:
+        trivy_data = json.load(f)
+
+    components = trivy_data.get("components", [])
+
+    # PURL dei soli componenti presenti nello SBOM Docker.
+    docker_purls = {
+        comp.get("purl")
+        for comp in components
+        if isinstance(comp, dict) and comp.get("purl")
+    }
+
     unified_map = {}
-    for filename, data in all_dependencies_data.items():
+
+    for data in all_dependencies_data.values():
         for edge in data.get("deps", []):
             source = edge.get("source")
             target = edge.get("target")
-            if source not in unified_map:
-                unified_map[source] = {"dependencies": []}
-            if target not in unified_map[source]["dependencies"]:
-                unified_map[source]["dependencies"].append(target)
 
-    # Costruzione della gerarchia totale 
-    with open(os.path.join(STORAGE_DIR, name_sbom_file_docker), "r") as f:
-        trivy_data = json.load(f)
-        sbom_components = trivy_data.get("components", [])
-    
-    hierarchy = {}
-    for comp in sbom_components:
-        purl = comp.get('purl')
-        if not purl: continue
-        # Colleghiamo il PURL alla sua lista di figli trovata nella unified_map
-        hierarchy[purl] = unified_map.get(purl, {}).get('dependencies', [])
+            # Entrambi gli estremi devono essere nell'immagine Docker.
+            if source not in docker_purls or target not in docker_purls:
+                continue
 
-    for comp in sbom_components:
-        purl = comp.get('purl')
-        if purl and purl not in hierarchy:
-            hierarchy[purl] = []
-            
+            unified_map.setdefault(source, [])
+
+            if target not in unified_map[source]:
+                unified_map[source].append(target)
+
+    # Mantiene tutti i nodi Docker, anche quelli senza archi.
+    hierarchy = {
+        purl: unified_map.get(purl, [])
+        for purl in docker_purls
+    }
+
     return hierarchy
 
 # ============================================================
@@ -270,6 +275,247 @@ def get_dependency_weight(purl, hierarchy, memo=None, visited_global=None):
     
     return count_total, unique_nodes, overlap
 
+# ===========================================================
+# FUNZIONE DI SUPPORTO CHE CHIAMA L'API DEPS.DEV PER RECUPERARE LE DIPENDENZE DI UN PACCHETTO, UTILIZZANDO IL PURL COME IDENTIFICATORE
+# ===========================================================
+
+DEPS_DEV_SYSTEMS = {
+    "maven": "maven",
+    "pypi": "pypi",
+    "npm": "npm",
+    "cargo": "cargo",
+}
+
+
+def dependency_identity(purl):
+    """Converte un PURL in un'identità confrontabile con deps.dev."""
+    try:
+        parsed = PackageURL.from_string(purl)
+    except Exception:
+        return None
+
+    package_type = (parsed.type or "").lower()
+
+    if package_type not in DEPS_DEV_SYSTEMS:
+        return None
+
+    if not parsed.name or not parsed.version:
+        return None
+
+    namespace = parsed.namespace or ""
+    name = parsed.name
+    version = parsed.version
+
+    if package_type == "maven":
+        # deps.dev identifica Maven con groupId:artifactId.
+        package_name = f"{namespace}:{name}" if namespace else name
+        normalized_name = package_name
+    elif package_type == "npm" and namespace:
+        normalized_name = f"{namespace}/{name}".lower()
+    elif package_type in {"pypi", "cargo", "npm"}:
+        normalized_name = name.lower()
+    else:
+        normalized_name = name
+
+    return (
+        DEPS_DEV_SYSTEMS[package_type],
+        normalized_name,
+        version,
+    )
+
+
+def fetch_deps_dev_dependencies(identity, session, cache):
+    """
+    Restituisce le identità delle dipendenze dichiarate da deps.dev.
+    Le identità vengono poi filtrate rispetto ai componenti Docker.
+    """
+    if identity in cache:
+        return cache[identity]
+
+    system, package_name, version = identity
+
+    # Codifica i segmenti del percorso senza codificare i separatori
+    # strutturali dell'endpoint.
+    encoded_package = quote(package_name, safe=":@")
+    encoded_version = quote(version, safe="")
+
+    url = (
+        f"https://api.deps.dev/v3alpha/systems/{system}"
+        f"/packages/{encoded_package}"
+        f"/versions/{encoded_version}:dependencies"
+    )
+
+    try:
+        response = session.get(url, timeout=15)
+
+        if response.status_code != 200:
+            print(
+                f"[DEPS.DEV] HTTP {response.status_code} "
+                f"per {system}:{package_name}@{version}"
+            )
+            cache[identity] = []
+            return []
+
+        data = response.json()
+        nodes = data.get("nodes", [])
+        edges = data.get("edges", [])
+
+        # Gli archi dell'API usano indici nella lista nodes.
+        node_identities = []
+
+        for node in nodes:
+            version_key = node.get("versionKey", {})
+
+            node_system = (version_key.get("system") or "").lower()
+            node_name = version_key.get("name", "")
+            node_version = version_key.get("version", "")
+
+            if not node_system or not node_name or not node_version:
+                node_identities.append(None)
+                continue
+
+            if node_system == "maven":
+                normalized_name = node_name
+            elif node_system in {"pypi", "npm", "cargo"}:
+                normalized_name = node_name.lower()
+            else:
+                normalized_name = node_name
+
+            node_identities.append(
+                (node_system, normalized_name, node_version)
+            )
+
+        result = []
+
+        for edge in edges:
+            source_index = edge.get("fromNode")
+            target_index = edge.get("toNode")
+
+            if not isinstance(source_index, int):
+                continue
+
+            if not isinstance(target_index, int):
+                continue
+
+            if not (
+                0 <= source_index < len(node_identities)
+                and 0 <= target_index < len(node_identities)
+            ):
+                continue
+
+            source_identity = node_identities[source_index]
+            target_identity = node_identities[target_index]
+
+            if source_identity is None or target_identity is None:
+                continue
+
+            # Conserva solo gli archi in uscita dal pacchetto interrogato.
+            if source_identity == identity:
+                result.append(target_identity)
+
+        cache[identity] = list(set(result))
+        return cache[identity]
+
+    except Exception as e:
+        print(
+            f"[DEPS.DEV] Errore per {system}:{package_name}@{version}: {e}"
+        )
+        cache[identity] = []
+        return []
+
+
+def complete_graph_with_deps_dev(hierarchy, docker_sbom_path):
+    """
+    Completa gli archi mancanti senza aggiungere nodi.
+
+    Ritorna:
+      - hierarchy completato
+      - lista degli archi aggiunti tramite deps.dev
+    """
+    with open(docker_sbom_path, "r", encoding="utf-8") as f:
+        sbom_data = json.load(f)
+
+    components = [
+        comp
+        for comp in sbom_data.get("components", [])
+        if isinstance(comp, dict) and comp.get("purl")
+    ]
+
+    # Identità deps.dev -> PURL originale Docker.
+    identity_to_purl = {}
+
+    for component in components:
+        purl = component["purl"]
+        identity = dependency_identity(purl)
+
+        if identity is not None:
+            identity_to_purl.setdefault(identity, purl)
+
+    docker_purls = set(hierarchy)
+
+    # Elimina eventuali archi preesistenti che puntano fuori dallo SBOM.
+    for source in hierarchy:
+        hierarchy[source] = list(dict.fromkeys(
+            target
+            for target in hierarchy[source]
+            if target in docker_purls
+        ))
+
+    # L'API viene interrogata per nodi senza dipendenze in uscita.
+    candidates = [
+        purl
+        for purl in hierarchy
+        if not hierarchy[purl]
+        and dependency_identity(purl) is not None
+    ]
+
+    deps_dev_edges = []
+    cache = {}
+    session = requests.Session()
+
+    try:
+        for source_purl in candidates:
+            source_identity = dependency_identity(source_purl)
+
+            if source_identity is None:
+                continue
+
+            discovered = fetch_deps_dev_dependencies(
+                source_identity,
+                session,
+                cache,
+            )
+
+            for target_identity in discovered:
+                # Non creare nodi che non esistono nello SBOM Docker.
+                target_purl = identity_to_purl.get(target_identity)
+
+                if target_purl is None:
+                    continue
+
+                if target_purl not in docker_purls:
+                    continue
+
+                if target_purl == source_purl:
+                    continue
+
+                # Registra soltanto gli archi realmente nuovi.
+                if target_purl not in hierarchy[source_purl]:
+                    hierarchy[source_purl].append(target_purl)
+
+                    deps_dev_edges.append({
+                        "source": source_purl,
+                        "target": target_purl,
+                    })
+    finally:
+        session.close()
+
+    print(
+        f"[DEPS.DEV] Componenti interrogati: {len(candidates)}; "
+        f"archi aggiunti: {len(deps_dev_edges)}"
+    )
+
+    return hierarchy, deps_dev_edges
 # ===========================================================
 #  Funzioni per il Dockerfile Parser e l'analisi dei RUN
 # ===========================================================

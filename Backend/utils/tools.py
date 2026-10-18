@@ -10,7 +10,7 @@ import stat
 # CONFIG VERSIONI
 # =====================================================
 
-TRIVY_VERSION = "0.72.0"
+TRIVY_VERSION = "0.75.0"
 CYCLONEDX_VERSION = None   # usa latest
 
 

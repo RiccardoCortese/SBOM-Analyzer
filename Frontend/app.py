@@ -17,6 +17,9 @@ from components.component_provenance import render_component_provenance
 from components.component_not_declared_vuln import render_component_not_declared_vuln
 from components.additional_components import render_additional_components
 from components.characterization_analysis import render_characterization_analysis
+from components.rq2_3_analysis import render_rq2_3_analysis
+from components.component_dockerstep import render_image_components_from_dockerfile
+from components.diff_sbom_source_image import render_source_image_sbom_comparison
 # ============================================================
 # CONFIGURAZIONE APP STREAMLIT
 # ============================================================
@@ -89,8 +92,17 @@ render_component_not_declared_vuln(BACKEND_URL)
 # Sezione Componenti Aggiuntivi RQ1
 render_additional_components(BACKEND_URL)
 
+# Sezione Confronto SBOM Sorgente vs Immagine Finale RQ1.1
+render_source_image_sbom_comparison(BACKEND_URL)
+
+# Sezione Componenti dell'immagine finale presenti negli step Dockerfile ma assenti dallo SBOM del sorgente + vulnerabilità
+render_image_components_from_dockerfile(BACKEND_URL)
+
 # Sezione Analisi della Caratterizzazione dei Componenti RQ2
 render_characterization_analysis(BACKEND_URL)
+
+# Sezione Analisi RQ2.3
+render_rq2_3_analysis(BACKEND_URL)
 
 # Sezione Ricerca Componenti specifici e Visualizzazione Grafi
 render_search_component(BACKEND_URL)

@@ -170,6 +170,33 @@ def render_graph_section(backend_url: str):
                 ]
 
                 # ============================================================
+                # RICERCA COMPONENTE DA EVIDENZIARE NEL GRAFO
+                # ============================================================
+
+                ricerca_componente = st.text_input(
+                    "Cerca un componente nel grafo:",
+                    placeholder="Inserisci nome, PURL o versione...",
+                    key=f"grafo_ricerca_componente_{file_selezionato}"
+                ).strip().casefold()
+
+                componenti_trovati = set()
+                if ricerca_componente:
+                    componenti_trovati = {
+                        n["id"]
+                        for n in unique_nodes.values()
+                        if ricerca_componente in str(n.get("id", "")).casefold()
+                        or ricerca_componente in str(n.get("label", "")).casefold()
+                    }
+
+                    if componenti_trovati:
+                        st.caption(
+                            f"Trovati {len(componenti_trovati)} componenti. "
+                            "Sono evidenziati in rosa nel grafo."
+                        )
+                    else:
+                        st.warning("Nessun componente trovato con questa ricerca.")
+
+                # ============================================================
                 # CREAZIONE NODI COLORATI
                 # ============================================================
 
@@ -181,13 +208,17 @@ def render_graph_section(backend_url: str):
 
                     group = get_package_group(purl)
 
-                    color = GROUP_COLORS[group]
+                    # L'evidenziazione è temporanea: cancellando la ricerca,
+                    # ogni nodo riprende automaticamente colore e dimensione originali.
+                    evidenziato = purl in componenti_trovati
+                    color = "#FF2D95" if evidenziato else GROUP_COLORS[group]
+                    size = 25 if evidenziato else 15
 
                     nodes.append(
                         Node(
                             id=purl,
                             label=n["label"],
-                            size=15,
+                            size=size,
                             color=color
                         )
                     )

@@ -473,36 +473,138 @@ def parse_pom_file(file_path):
 # build.gradle / build.gradle.kts (Gradle)
 # ============================================================
 
-def parse_gradle_file(file_path):
+# Qualsiasi configurazione Gradle (implementation, api, kapt, developmentOnly, platform(...), ecc.)
+# seguita da "gruppo:artefatto[:versione]"
+_GRADLE_STRING_DEP = re.compile(
+    r"\b[A-Za-z_]\w*\s*\(?\s*['\"]([\w\-\.]+):([\w\-\.]+)(?::([^'\"\s)]+))?['\"]"
+)
+
+# Notazione a mappa: group: 'x', name: 'y', version: 'z'  (oppure group = "x", name = "y", ...)
+_GRADLE_MAP_DEP = re.compile(
+    r"\b[A-Za-z_]\w*\s*\(?\s*group\s*[:=]\s*['\"]([^'\"]+)['\"]\s*,\s*name\s*[:=]\s*['\"]([^'\"]+)['\"]"
+    r"(?:\s*,\s*version\s*[:=]\s*['\"]([^'\"]+)['\"])?"
+)
+
+# Riferimenti al version catalog: libs.spring.boot.starter.web
+_GRADLE_CATALOG_REF = re.compile(r"\blibs\.([A-Za-z0-9_.]+)")
+
+
+def parse_version_catalog(file_path):
+    """
+    gradle/libs.versions.toml -> {alias con punti: {group, artifact, version}}
+    L'alias "spring-boot-starter-web" si usa nel build come libs.spring.boot.starter.web.
+    """
+    catalog = {}
+
+    try:
+        with open(file_path, "rb") as f:
+            data = tomllib.load(f)
+    except Exception as e:
+        print(f"[SOURCE-DEPENDENCIES] Errore version catalog {file_path}: {e}", flush=True)
+        return catalog
+
+    versions = data.get("versions", {}) or {}
+
+    for alias, value in (data.get("libraries", {}) or {}).items():
+
+        group = artifact = version = None
+
+        if isinstance(value, str):
+            parts = value.split(":")
+            if len(parts) >= 2:
+                group, artifact = parts[0], parts[1]
+                version = parts[2] if len(parts) > 2 else None
+
+        elif isinstance(value, dict):
+            module = value.get("module")
+
+            if isinstance(module, str) and ":" in module:
+                group, artifact = module.split(":", 1)
+            else:
+                group, artifact = value.get("group"), value.get("name")
+
+            raw_version = value.get("version")
+
+            if isinstance(raw_version, str):
+                version = raw_version
+            elif isinstance(raw_version, dict):
+                ref = raw_version.get("ref")
+                if ref:
+                    resolved = versions.get(ref)
+                    version = resolved if isinstance(resolved, str) else None
+                else:
+                    version = (
+                        raw_version.get("strictly")
+                        or raw_version.get("require")
+                        or raw_version.get("prefer")
+                    )
+
+        if group and artifact:
+            normalized_alias = re.sub(r"[-_.]+", ".", str(alias).lower())
+            catalog[normalized_alias] = {
+                "group": group,
+                "artifact": artifact,
+                "version": version if isinstance(version, str) else None
+            }
+
+    return catalog
+
+
+def parse_gradle_file(file_path, catalog=None):
     dependencies = []
+    seen = set()
+
+    def add(group, artifact, version):
+        # versione assente o con variabile (es. $springVersion): non risolvibile.
+        # Toglie classificatori/estensioni (1.0@aar).
+        if version:
+            version = re.split(r"[@:]", version)[0]
+        if not version or "$" in version:
+            version = None
+
+        key = (group, artifact, version)
+        if key in seen:
+            return
+        seen.add(key)
+
+        dependencies.append({
+            "name": f"{group}:{artifact}",
+            "group": group,
+            "artifact": artifact,
+            "version": version,
+            "ecosystem": "maven",  # Nel mondo SBOM/PURL, Gradle mappa sempre su pkg:maven/
+            "source_file": os.path.basename(file_path),
+            "source_type": "gradle"
+        })
+
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             content = f.read()
 
-        # Pattern comuni di Gradle: 
-        # implementation 'group:artifact:version' 
-        # implementation("group:artifact:version")
-        # api group: '...', name: '...', version: '...'
-        pattern_string_notation = (
-            r"(?:implementation|api|compile|compileOnly|runtimeOnly|testImplementation|"
-            r"testRuntimeOnly|testCompileOnly|annotationProcessor)"
-            r"\s*\(?\s*['\"]([\w\-\.]+):([\w\-\.]+)(?::([\w\-\.\+\$\{\}]+))?['\"]"
-        )
-        
-        matches = re.findall(pattern_string_notation, content)
-        for group, artifact, version in matches:
-            # versione assente o con variabile (es. $springVersion): non risolvibile
-            if not version or "$" in version:
-                version = None
-            dependencies.append({
-                "name": f"{group}:{artifact}",
-                "group": group,
-                "artifact": artifact,
-                "version": version,
-                "ecosystem": "maven", # Nel mondo SBOM/PURL, Gradle mappa sempre su pkg:maven/
-                "source_file": os.path.basename(file_path),
-                "source_type": "gradle"
-            })
+        # Toglie i commenti: una dipendenza commentata non e' dichiarata
+        content = re.sub(r"/\*.*?\*/", "", content, flags=re.S)
+        content = re.sub(r"(?m)^\s*//.*$", "", content)
+
+        for group, artifact, version in _GRADLE_STRING_DEP.findall(content):
+            add(group, artifact, version)
+
+        for group, artifact, version in _GRADLE_MAP_DEP.findall(content):
+            add(group, artifact, version)
+
+        if catalog:
+            for reference in _GRADLE_CATALOG_REF.findall(content):
+                parts = reference.rstrip(".").split(".")
+
+                if not parts or parts[0] in ("versions", "bundles", "plugins"):
+                    continue
+
+                # libs.a.b.c.get() -> prova il prefisso piu' lungo che e' un alias del catalogo
+                for i in range(len(parts), 0, -1):
+                    entry = catalog.get(".".join(parts[:i]))
+                    if entry:
+                        add(entry["group"], entry["artifact"], entry["version"])
+                        break
+
     except Exception as e:
         print(f"[SOURCE-DEPENDENCIES] Errore parsing gradle {file_path}: {e}", flush=True)
 
@@ -605,15 +707,18 @@ def load_source_dependencies(STORAGE_DIR):
 
     # I file copiati da upload_sbom hanno il prefisso del percorso
     # (es. backend_requirements.txt, moduloA_pom.xml): cerchiamo per suffisso.
+    # "*.versions.toml" per primo: il catalogo serve a risolvere i riferimenti libs.* dei build Gradle
     patterns = [
+        "*.versions.toml",
         "*requirements*.txt",
         "*pyproject.toml",
         "*pom.xml",
-        "*build.gradle",
-        "*build.gradle.kts"
+        "*.gradle",       # tutti gli script Gradle: build.gradle, ma anche dependencies.gradle, libs.gradle, ecc.
+        "*.gradle.kts"
     ]
 
     seen_files = set()
+    version_catalog = {}
 
     for pattern in patterns:
 
@@ -628,7 +733,11 @@ def load_source_dependencies(STORAGE_DIR):
 
             filename = os.path.basename(file_path)
 
-            if fnmatch.fnmatch(filename, "*requirements*.txt"):
+            if filename.endswith(".versions.toml"):
+
+                version_catalog.update(parse_version_catalog(file_path))
+
+            elif fnmatch.fnmatch(filename, "*requirements*.txt"):
 
                 dependencies.extend(parse_requirements_file(file_path))
 
@@ -640,9 +749,9 @@ def load_source_dependencies(STORAGE_DIR):
 
                 dependencies.extend(parse_pom_file(file_path))
 
-            elif filename.endswith(("build.gradle", "build.gradle.kts")):
+            elif filename.endswith((".gradle", ".gradle.kts")):
 
-                dependencies.extend(parse_gradle_file(file_path))
+                dependencies.extend(parse_gradle_file(file_path, version_catalog))
 
     # Elimina duplicati
     unique = {}
@@ -795,12 +904,18 @@ def component_matches_dependency(component, dependency):
     
     return False
 
+def is_exact_version(version):
+    """Versione esatta (inizia con una cifra, nessun carattere dinamico come +, [, ( o ,)."""
+    return bool(version) and re.fullmatch(r"[0-9][A-Za-z0-9._\-]*", version) is not None
+
+
 def find_declared_components(source_dependencies, sbom_components):
     print(f"[DEBUG SBOM TYPE] Tipo: {type(sbom_components)}, Elementi: {len(sbom_components)}", flush=True)
     if isinstance(sbom_components, list) and len(sbom_components) > 0:
         print(f"[DEBUG SBOM FIRST] Primo elemento: {sbom_components[0]}", flush=True)
     declared = {}
     matched_dependencies = []
+    rejected_by_version = []
 
     for purl, component in sbom_components.items():
 
@@ -815,12 +930,18 @@ def find_declared_components(source_dependencies, sbom_components):
                 dep_version = dependency.get("version")
                 comp_version = component.get("version")
 
+                # Il controllo di versione vale solo per i pom.xml: in Maven la versione dichiarata
+                # e' quella risolta. Gradle invece risolve i conflitti scegliendo di solito la piu'
+                # alta e puo' applicare BOM/plugin di gestione delle dipendenze: la versione risolta
+                # nello SBOM puo' legittimamente differire da quella scritta nello script, quindi per
+                # Gradle si confronta solo il nome. Le versioni dinamiche non sono mai confrontate.
                 if (
-                    dependency.get("ecosystem") == "maven"
-                    and dep_version
+                    dependency.get("source_type") == "pom.xml"
+                    and is_exact_version(dep_version)
                     and comp_version
                     and dep_version != comp_version
                 ):
+                    rejected_by_version.append((purl, dep_version))
                     continue
 
                 declared[purl] = {
@@ -840,7 +961,95 @@ def find_declared_components(source_dependencies, sbom_components):
 
                 break
 
+    print(
+        f"[DEBUG DICHIARATI] dichiarati per nome: {len(declared)}, "
+        f"scartati per versione diversa (solo pom.xml): {len(rejected_by_version)}",
+        flush=True
+    )
+    for rejected_purl, rejected_version in rejected_by_version[:5]:
+        print(f"[DEBUG DICHIARATI]   scartato {rejected_purl} (dichiarata {rejected_version})", flush=True)
+
     return declared, matched_dependencies
+
+
+def find_graph_declared_components(sbom_paths, sbom_components):
+    """
+    Ripiego per quando i manifest non permettono di individuare nessun dichiarato (es. dipendenze
+    Gradle dichiarate in buildSrc, plugin di convenzione o script non letti).
+    Negli SBOM sorgente le dipendenze dirette del progetto sono i figli dei nodi radice del grafo:
+    il componente radice del progetto, i nodi "application" di Trivy (uno per file letto) e, nei BOM
+    aggregati, i moduli del progetto stesso. Quei componenti figli sono i dichiarati.
+    Ritorna {purl nel grafo unito: componente + origine}.
+    """
+    index = {}
+    for purl in sbom_components:
+        index.setdefault(purl.split("?")[0].lower(), purl)
+
+    declared = {}
+
+    for path in sbom_paths:
+
+        sbom = load_json_file(path)
+
+        if not isinstance(sbom, dict):
+            continue
+
+        root = (sbom.get("metadata") or {}).get("component") or {}
+        root_group = root.get("group")
+
+        ref_to_purl = {}
+        module_refs = set()
+
+        for component in sbom.get("components", []):
+
+            if not isinstance(component, dict) or not component.get("bom-ref"):
+                continue
+
+            if component.get("purl"):
+                ref_to_purl[component["bom-ref"]] = component["purl"]
+
+            # Moduli del progetto stesso (BOM aggregati): hanno il groupId del componente radice
+            if root_group and component.get("group") == root_group:
+                module_refs.add(component["bom-ref"])
+
+        for dependency in sbom.get("dependencies", []):
+
+            ref = dependency.get("ref")
+
+            if not ref or str(ref).startswith("pkg:oci/"):
+                continue
+
+            # Il genitore deve essere un nodo radice: non un componente di terze parti
+            if ref in ref_to_purl and ref not in module_refs:
+                continue
+
+            for child_ref in dependency.get("dependsOn", []):
+
+                if child_ref in module_refs:
+                    continue
+
+                child_purl = ref_to_purl.get(child_ref)
+
+                if not child_purl:
+                    continue
+
+                target = (
+                    child_purl
+                    if child_purl in sbom_components
+                    else index.get(child_purl.split("?")[0].lower())
+                )
+
+                if not target:
+                    continue
+
+                declared.setdefault(target, {
+                    **sbom_components[target],
+                    "source_file": os.path.basename(path),
+                    "source_type": "sbom-graph",
+                    "declared_version": None
+                })
+
+    return declared
 
 # ============================================================
 # Ricerca catena verso una dipendenza dichiarata
@@ -983,7 +1192,7 @@ def find_indirect_components(sbom_components, dependency_map, declared_purls, tr
 # ============================================================
 
 
-def analyze_source_components(STORAGE_DIR):
+def analyze_source_components(STORAGE_DIR, source_sbom_paths=None):
 
     final_sbom_path = os.path.join(STORAGE_DIR,"final_merged_sbom.json")
 
@@ -1013,6 +1222,29 @@ def analyze_source_components(STORAGE_DIR):
         source_dependencies,
         sbom_components
     )
+
+    # Ripiego: nessun dichiarato dai manifest -> dichiarati = dipendenze dirette nel grafo degli SBOM sorgente
+    declared_source = "manifest"
+
+    if not declared_components:
+
+        graph_paths = (
+            source_sbom_paths
+            if source_sbom_paths is not None
+            else glob.glob(os.path.join(STORAGE_DIR, "manifests", "*.json"))
+        )
+
+        graph_declared = find_graph_declared_components(graph_paths, sbom_components)
+
+        if graph_declared:
+            declared_components = graph_declared
+            declared_source = "sbom-graph"
+            print(
+                f"[DEBUG] Nessun dichiarato dai manifest: uso le dipendenze dirette del grafo "
+                f"degli SBOM sorgente ({len(graph_declared)} componenti).",
+                flush=True
+            )
+
     print(f"[DEBUG] Componenti dichiarati mappati con successo: {len(declared_components)}", flush=True)
     print("\n" + "="*60, flush=True)
     print("🔍 DOUBLE CHECK: COMPONENTI DICHIARATI MAPPATI NELLO SBOM", flush=True)
@@ -1375,6 +1607,8 @@ def analyze_source_components(STORAGE_DIR):
         "not_declared": not_declared,
 
         "source_dependencies": source_dependencies,
+
+        "declared_source": declared_source,
 
         "stats": {
             "source_declarations": len(
